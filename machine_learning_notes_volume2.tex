@@ -25,6 +25,68 @@
 
 \tableofcontents
 
+\section{Приемы работы с библиотеками Gym и Ecole}
+
+\subsection{Gym}
+
+Функция окружения (environment) \texttt{step} возвращает четыре значения:
+\begin{itemize}
+	\item \verb|observation| (object):  это объект, специфичный для окружающей среды и представляющий результат наблюдения за этой средой (например, состояние доски в настольной игре),
+	
+	\item \verb|reward| (float): вознаграждение, полученное за предыдущее действие. Масштаб варьируется в зависимости от среды, но цель всегда в том, чтобы сделать суммарное вознаграждение как можно больше,
+	
+	\item \verb|done| (boolean): флаг завершения эпизода. Многие (но не все) задачи разделены на четко определенные эпизоды, и \texttt{done = True} указывает на то, что эпизод завершился (например, мы потеряли последнюю жизнь в игре),
+	
+	\item \verb|info| (dict): диагонстическая информация, полезная для отладки.
+\end{itemize}
+
+Это просто реализация классического цикла <<агент -- среда>>. На каждом шаге агент совершает то или иное действие и среда возвращает наблюдения (observation) и вознаграждение (reward).
+
+Процесс запускается вызовом функции \verb|reset()|, которая возвращает первое приближение \texttt{observation}.  
+\begin{lstlisting}[
+style=ironpython,
+numbers=none
+]
+import gym
+env = gym.make('CartPole-v0')
+for i_episode in range(20):
+    observation = env.reset()
+    for t in range(100):
+        env.render()
+        print(observation)
+        action = env.action_space.sample()
+        observation, reward, done, info = env.step(action)
+        if done:
+            print("Episode finished after {} timesteps".format(t+1))
+            break
+env.close()
+\end{lstlisting}
+
+В этом примере мы отбирали случайные действия из пространства действий среды. Каждая среда поставляется с атрибутами \verb|action_space| и \verb|observation_space|. Эти атрибуты имеют тип \verb|Space| и описывают формат допустимых действий и наблюдений
+\begin{lstlisting}[
+style=ironpython,
+numbers=none
+]
+import gym
+
+env = gym.make("CartPole-v0")
+print(env.action_space)  # Discrete(2)
+
+print(env.observation_space)  # Box([-4.8000002e+00 -3.4028235e+38 -4.1887903e-01 -3.4028235e+38], [4.8000002e+00 3.4028235e+38 4.1887903e-01 3.4028235e+38], (4,), float32)
+\end{lstlisting}
+
+Пространство \texttt{Descrete} описывает фиксированный диапазон неотрицательных чисел, так что в данном случае допустимыми действиями будет 0 или 1. Пространство \texttt{Box} представляет $ n $-мерный ящик, так что в данном случае допустимыми наблюдениями будут 4-мерные массивы.
+
+\subsection{Ecole}
+
+Полезный ресурс о специальных приемах работы с задачами линейного программирования в частично-целочисленного постановке \url{https://www.gams.com/37/docs/UG_LanguageFeatures.html?search=sos1}
+
+\subsubsection{Observations}
+
+Класс \texttt{ecole.observation.NodeBipartiteObs}: двудольный граф наблюдений для узлов branch-and-bound дерева. Оптимизационная задача представляется в виде гетерогенного двудольного графа. Между переменной и ограничением будет существовать ребро, если переменная присутствует в ограничении с ненулевым коэффициентом.
+
+Метод \texttt{reset()} в Ecole принимает в качестве аргумента экземпляр проблемы. 
+
 
 
 \listoffigures\addcontentsline{toc}{section}{Список иллюстраций}
