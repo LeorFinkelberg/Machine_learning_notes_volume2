@@ -25,6 +25,321 @@
 
 \tableofcontents
 
+\section{Приемы работы с Catboost}
+
+Онлайн документация пакета \url{https://catboost.ai/en/docs/concepts/python-reference_catboostregressor}.
+
+\subsection{Установка CatBoost}
+
+Установить пакет можно с помощью менеджера \texttt{conda} (или с помощью \texttt{pip})
+\begin{lstlisting}[
+style = bash,
+numbers = none
+]
+$ conda config --show channels
+# если канала conda-forge нет в списке, то следует его добавить 
+$ conda config --add channels conda-forge
+$ conda install catboost
+$ pip install catboost
+\end{lstlisting}
+
+\subsection{Ключевые особенности пакета}
+
+\subsection{Параметры}
+
+Ознакомится с описанием параметров можно здесь \url{https://catboost.ai/en/docs/references/training-parameters/}
+
+Общие параметры:
+\begin{itemize}
+	\item \verb|loss_function| (objective) -- функция потерь, которая используется на шаге обучения модели.
+	
+	\item \texttt{iterations} -- максимальное число деревьев в ансамбле,
+	
+	\item \verb*|learning_rate| -- темп обучения,
+	
+	\item \verb*|l2_leaf_reg| -- коэффициент при члене $ L_2 $-регуляризации,
+	
+	\item \verb*|bagging_temperature| -- задает настройки Байесовского бутстрапа
+\end{itemize}
+
+
+
+\subsection{Классификатор CatBoostClassfier}
+
+Класс \texttt{CatBoostClassifier}
+
+\begin{lstlisting}[
+style = ironpython,
+numbers = none	
+]
+class CatBoostClassifier(
+		iterations=None,
+		learning_rate=None,
+		depth=None,
+		l2_leaf_reg=None,
+		model_size_reg=None,
+		rsm=None,
+		loss_function=None,
+		border_count=None,
+		feature_border_type=None,
+		per_float_feature_quantization=None,                         
+		input_borders=None,
+		output_borders=None,
+		fold_permutation_block=None,
+		od_pval=None,
+		od_wait=None,
+		od_type=None,
+		nan_mode=None,
+		counter_calc_method=None,
+		leaf_estimation_iterations=None,
+		leaf_estimation_method=None,
+		thread_count=None,
+		random_seed=None,
+		use_best_model=None,
+		verbose=None,
+		logging_level=None,
+		metric_period=None,
+		ctr_leaf_count_limit=None,
+		store_all_simple_ctr=None,
+		max_ctr_complexity=None,
+		has_time=None,
+		allow_const_label=None,
+		classes_count=None,
+		class_weights=None,
+		one_hot_max_size=None,
+		random_strength=None,
+		name=None,
+		ignored_features=None,
+		train_dir=None,
+		custom_loss=None,
+		custom_metric=None,
+		eval_metric=None,
+		bagging_temperature=None,
+		save_snapshot=None,
+		snapshot_file=None,
+		snapshot_interval=None,
+		fold_len_multiplier=None,
+		used_ram_limit=None,
+		gpu_ram_part=None,
+		allow_writing_files=None,
+		final_ctr_computation_mode=None,
+		approx_on_full_history=None,
+		boosting_type=None,
+		simple_ctr=None,
+		combinations_ctr=None,
+		per_feature_ctr=None,
+		task_type=None,
+		device_config=None,
+		devices=None,
+		bootstrap_type=None,
+		subsample=None,
+		sampling_unit=None,
+		dev_score_calc_obj_block_size=None,
+		max_depth=None,
+		n_estimators=None,
+		num_boost_round=None,
+		num_trees=None,
+		colsample_bylevel=None,
+		random_state=None,
+		reg_lambda=None,
+		objective=None,
+		eta=None,
+		max_bin=None,
+		scale_pos_weight=None,
+		gpu_cat_features_storage=None,
+		data_partition=None
+		metadata=None,
+		early_stopping_rounds=None,
+		cat_features=None,
+		grow_policy=None,
+		min_data_in_leaf=None,
+		min_child_samples=None,
+		max_leaves=None,
+		num_leaves=None,
+		score_function=None,
+		leaf_estimation_backtracking=None,
+		ctr_history_unit=None,
+		monotone_constraints=None,
+		feature_weights=None,
+		penalties_coefficient=None,
+		first_feature_use_penalties=None,
+		model_shrink_rate=None,
+		model_shrink_mode=None,
+		langevin=None,
+		diffusion_temperature=None,
+		posterior_sampling=None,
+		boost_from_average=None,
+		text_features=None,
+		tokenizers=None,
+		dictionaries=None,
+		feature_calcers=None,
+		text_processing=None
+)
+\end{lstlisting}
+
+LogLoss применяется для задач бинарной классификации (когда целевей вектор содиржит только два уникальных значения или когда параметр \verb|target_border is not None|).
+
+MultiClass используется в задачах мультиклассовой классификации (когда целевой вектор содержит более 2 уникальных значений или параметр \verb|border_count is None|)
+
+\subsection{Регрессор CatBoostRegressor}
+
+Помимо \texttt{iterations} и \texttt{learning\_rate} у CatBoost 5 важнейших гиперпараметров:
+\begin{itemize}
+	\item \texttt{max\_depth}: мак,
+	
+	\item \texttt{l2\_leaf\_reg},
+	
+	\item \texttt{border\_count},
+	
+	\item \texttt{random\_strength},
+	
+	\item \texttt{bagging\_temperature}.
+\end{itemize}
+
+\subsection{Функции потерь и метрики качества}
+
+\subsubsection{Для классификации}
+
+Для мультиклассификации \url{https://catboost.ai/en/docs/concepts/loss-functions-multiclassification}
+
+\emph{Функции потерь}
+\begin{itemize}
+	\item LogLoss
+\begin{align*}
+	- \dfrac{ \sum\limits_{i=1}^N w_i \big( c_i \log p_i + (1 - c_i) \log (1 - p_i) \big) }{ \sum\limits_{i=1}^{N} w_i },
+\end{align*}
+
+    \item CrossEntropy
+\begin{align*}
+	- \dfrac{ \sum\limits_{i=1}^N w_i \big( t_i \log p_i + (1 - t_i) \log (1 - p_i) \big) }{ \sum\limits_{i=1}^{N} w_i },
+\end{align*}
+\end{itemize}
+
+\emph{Метрики качества}
+\begin{itemize}
+	\item Precision (точность),
+	
+	\item Recall (полнота),
+	
+	\item F1 (гармоническое среднее),
+	
+	\item BalancedAccuracy
+\begin{align*}
+	\dfrac{1}{2} \Big( \dfrac{TP}{T} + \dfrac{TN}{N} \Big),
+\end{align*}
+
+    \item BalancedErrorRate
+\begin{align*}
+	\dfrac{1}{2} \Big( \dfrac{FP}{TN + FP} + \dfrac{FN}{FN + TP} \Big),
+\end{align*}
+
+    \item AUC,
+    
+    \item BrierScore,
+    
+    \item HingeLoss,
+    
+    \item HammingLoss
+\begin{align*}
+	\dfrac{ \sum\limits_{i=1}^{N} w_i [[p_i > 0.5] == t_i] }{ \sum\limits_{i=1}^{N} w_i},
+\end{align*}
+
+    \item Kappa
+\begin{align*}
+	1 - \dfrac{1 - Accuracy}{1 - RAccuracy},\\
+	RAccuracy = \dfrac{ (TN + FP) (TN + FN) + (FN + TP)(FP + TP) }{ \Big( \sum\limits_{i=1}^{N} w_i \Big)^2 }
+\end{align*}
+
+    \item LogLikelihoodOfPrediction.
+\end{itemize}
+
+\subsubsection{Для регрессии}
+
+\emph{Метрики качества, которые могут играть роль функции потерь}
+
+\begin{itemize}
+	\item MultiRMSE (в случае мультирегрессии)
+\begin{align*}
+	\Biggl( \dfrac{ \sum\limits_{i=1}^N \sum\limits_{d=1}^{dim} (a_{i,d} - t_{i,d})^2 w_i }{ \sum\limits_{i=1}^N w_i } \Biggr)^{1/2}
+\end{align*}
+	
+	\item MAE
+\begin{align*}
+	\dfrac{ \sum\limits_{i=1}^{N} w_i | a_i - t_i |}{ \sum\limits_{i=1}^{N} w_i },
+\end{align*}
+
+    \item MAPE
+\begin{align*}
+	\dfrac{ \sum\limits_{i=1}^{N} w_i \dfrac{ | a_i - t_i | }{ \max (1, | t_i |) } }{ \sum\limits_{i=1}^N w_i }
+\end{align*}
+
+    \item Poisson
+\begin{align*}
+	\dfrac{ \sum\limits_{i=1}^N w_i (e^{ a_i } - a_i t_i) }{ \sum\limits_{i=1}^N w_i },
+\end{align*}
+
+   \item Quantile (большие значения $ \alpha $ сильнее штрафуют за заниженные прогнозы)
+\begin{align*}
+	\dfrac{ \sum\limits_{i=1}^N \Big( \alpha - 1[t_i \leqslant a_i] \Big) (t_i - a_i) w_i}{ \sum\limits_{i=1}^N w_i },
+\end{align*}
+
+    \item RMSE
+\begin{align*}
+	\Bigg( \dfrac{ \sum\limits_{i=1}^N (a_i - t_i)^2 w_i }{ \sum\limits_{i=1}^N w_i } \Bigg)^{1/2}
+\end{align*}
+
+    \item LogLinQuantile,
+    
+    \item Lq
+\begin{align*}
+	\dfrac{\sum\limits_{i=1}^N | a_i - t_i |^q w_i}{ \sum\limits_{i=1}^N w_i }
+\end{align*}
+
+    \item Huber
+\begin{align*}
+	L(t, a) = \sum_{i=0}^N l(t_i, a_i) \cdot w_i,\quad l(t, a) = 
+	\begin{cases}
+		\dfrac{1}{2} (t - a)^2, &| t - a | \leqslant \delta,\\
+		\delta | t - a | - \dfrac{1}{2} \delta^2, &| t - a | > \delta.
+	\end{cases}
+\end{align*}
+
+\item Excpectile
+\begin{align*}
+	\dfrac{ \sum\limits_{i=1}^N | \alpha - 1[t_i \leqslant a_i] | (t_i - a_i)^2 w_i }{ \sum\limits_{i=1}^N w_i }
+\end{align*}
+
+\item Tweedie
+\begin{align*}
+	\dfrac{ \sum\limits_{i=1}^N \Big( \dfrac{e^{a_i (2 - \lambda)}}{2 - \lambda} - t_i \dfrac{ e^{a_i ( 1 - \lambda)} }{ 1 - \lambda } \Big) w_i }{ \sum\limits_{i=1}^N w_i },
+\end{align*}
+где $ \lambda $ -- значение параметра дисперсии мощности,
+\end{itemize}
+
+\emph{Метрики качества}
+
+\begin{itemize}
+	\item SMAPE
+\begin{align*}
+	\dfrac{ 100 \sum\limits_{i=1}^N \dfrac{ w_i | a_i - t_i | }{ (|t_i| + |a_i|)/2 } }{ \sum\limits_{i=1}^N w_i }
+\end{align*}
+
+    \item R2 (коэффициент детерминации)
+\begin{align*}
+	1 - \dfrac{ \sum\limits_{i=1}^N w_i (a_i - t_i)^2 }{ \sum\limits_{i=1}^N w_i (\bar{t} - t_i)^2 }.
+\end{align*}
+
+    \item MSLE (среднеквадратическая логарифмическая ошибка)
+\begin{align*}
+	\dfrac{ \sum\limits_{i=1}^N w_i \big( \ln (1 + t_i) - \ln (1 + a_i) \big)^2 }{ \sum\limits_{i=1}^N w_i }
+\end{align*}
+
+    \item MedianAbsoluteError
+\begin{align*}
+	median(|t_1 - a_1|, \ldots, |t_N - a_N|)
+\end{align*}
+\end{itemize}
+
 \section{Приемы работы с библиотеками Gym и Ecole}
 
 \subsection{Gym}
@@ -94,6 +409,10 @@ print(env.observation_space)  # Box([-4.8000002e+00 -3.4028235e+38 -4.1887903e-0
 BoostARoota \url{https://github.com/chasedehan/BoostARoota} -- алгоритм отобора признаков на базе экстримального градиентного бустинга в реализации XGBoost. Алгоритм требует гораздо меньших затрат времени на выполнение. Перед применением необходимо выполнить дамми-кодирование, поскольку базовая модель работает только с количественными признаками.
 
 Отбор признаков выполняется на обучающем поднаборе данных, поэтому предполагается, что массив меток и массив признаков \emph{обучающие}, а для проверки качества модели отбора признаков есть независимая, \emph{тестовая} выборка. Кроме того, если необходимо выбрать оптимальные значения гиперпараметров модели отбора признаков (например, значения гиперпараметров \texttt{cutoff}, \texttt{iters} и \texttt{delta}), то понадобиться еще \emph{проверочная} {выборка}.
+
+\section{HDI}
+
+Highest Density Interval (HDI) -- интервал высокой плотности -- показывает какие точки распределения наиболее достоверны/правдоподобны и охватывают большую часть распределения. Каждая точка внутри интервала имеет более высокую \emph{достоверность}, чем любая точка вне интервала.
 
 \section{Площадь по ROC-кривой}
 
