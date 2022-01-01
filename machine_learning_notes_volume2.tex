@@ -25,7 +25,790 @@
 
 \tableofcontents
 
-\section{Приемы работы с Catboost}
+\section{Приемы работы с библиотекой анализа временных рядов ETNA}
+
+\subsection{Перекрестная проверка на временных рядах}
+
+Перекрестную проверку с расширяющимся окном (или на скользящем окне) в бибилотеке ETNA можно выполнить с помощью метода \verb|.backtest()|. Этот метод возвращает три кадра данных: кадр данных с метриками по каждой тестовой выборке перекрестной проверки, кадр данных с прогнозами и кадр данных с временными метками обучающего и тестового поднаборов данных.
+
+В перекрестной проверке расширяющися окном количество наблюдений, использованных для обучения в каждой итерации, растет с числом итераций, предоставляет все больший объем данных для обучения.
+
+\begin{figure}[h]
+	\centering
+	\includegraphics[scale=0.3]{figures/cross_val_ts.png}
+	\caption{ Перекрестная проверка на временном ряду \emph{расширяющимся} окном }\label{fig:cross_val_ts}
+\end{figure}
+
+Для тестирования мы каждый раз берем совершенно новые более поздние наблюдения. Обучающая выборка прирастает на количество наблюдений, равное горизонту прогнозирования.
+
+При необходимости обучение модели в каждом разбиении можно сделать последовательным, используя в каждой итерации для обучения фиксированное количество наиболее свежих (поздних) наблюдений, предшествующих точке разбиения. Таким образом, в каждой новой итерации мы будем обучаться на более свежих данных, обучающая выборка каждый раз сдвигается вперед по временной оси (обычно на горизонт прогнозирования) и такой способ проверки называют перекрестной проверкой скользящим окном (sliding/rolling window).
+
+\begin{figure}[h]
+	\centering
+	\includegraphics[scale=0.3]{figures/cross_val_rol_ts.png}
+	\caption{ Перекрестная проверка \emph{на скользящем} окне }\label{fig:cross_val_rol_ts}
+\end{figure}
+
+С каждой итерацией обучающая выборка использует все более свежие наблюдения, при этом для тестирования мы каждый раз берем совершенно новые более поздние наблюдения. Размер обучающей выборки остается неизменным, поэтому в ETNA этот вид проверки назван \verb|constant|.
+
+NB При выполнении перекрестной проверки для временных рядов полезно помнить ряд правил:
+\begin{itemize}
+	\item Размер тестовой выборки, как правило, определяется горизонтом прогнозирования, а тот в свою очередь определяется бизнес-требования. Если вы предсказываете на 14 дней вперед, то и тестовая выборка должна включать 14 более поздних наблюдений.
+	
+	\item Размер тестовой выборки остается постоянным. Это значит, что метрики качества, полученные в результате вычислений прогнозов каждой обученной модели по тестовому набору, будут последовательны и их можно объединять и сравнивать.
+	
+	\item Размер обучающей выборки не может быть меньше тестовой выборки.
+	
+	\item Если данные содержат сезонность, обучающая выборка должна содержать не менее двух полных сезонных циклов (правило $ 2L $, где $ L $ -- количество периодов в полном сезонном цикле, необходимое для инициализации параметров некоторых моделей, например, для вычисления исходного значения тренда в модели тройного экспонециального сглаживания), учитывая уменьшение длины ряда при выполнении процедур обычного и сезонного дифференциирования.
+	
+	\item Если применяются переменные -- лаги, разности на лагах, скользящие статистики, то каждый раз для получения значений в тестовой выборке используются только данных обучающей выборки.
+\end{itemize}
+
+Перекрестную проверку расширяющимся окном можно модифицировать так, чтобы обучающая выборка прирастала на количество наблюдений меньше горизонта прогнозирования и тогда в тестовую выборку попадут наблюдения, уже попадавшие в тестовую выборку на предыдущей итерации. Это позволяет управлять скоростью обновления модели, лучше выявлять аномальные, нетипичные наблюдения, которые плохо предсказываются, точнее определить момент ухудшения качества модели.
+
+\begin{figure}[h]
+	\centering
+	\includegraphics[scale=0.3]{figures/cross_val_expand_ts.png}
+	\caption{ Модфицированная перекрестная проверка расширяющимся окном }\label{fig:cross_val_expand_ts}
+\end{figure}
+
+Перекрестную проверку скользящим окном тоже можно модифицировать так, чтобы обучающая выборка сдвигалась вперед не на весь горизонт прогнозирония, а на половину или на треть, и тогда в тестовую выборку попадут наблюдения, уже попадавшие в тестовую выборку на предыдущей итерации. Это позволяет управлять скоростью обновления модели, лучше выявлять аномальные, нетипичные наблюдения, которые плохо предсказываются, точнее определять момент ухудшения качества модели.
+
+\begin{figure}[h]
+	\centering
+	\includegraphics[scale=0.3]{figures/cross_val_rol_modif_ts.png}
+	\caption{ Модфицированная перекрестная проверка скользящим окном }\label{fig:cross_val_rol_modif_ts}
+\end{figure}
+
+Однако, в библиотеке ETNA и библиотеке scikit-learn с помощью класса TimeSeriesSplit нельзя корректно реализовать вышеописанные модификации.
+
+При использовании перекрестной проверки расширяющимся окном модель в большей степени нацелена на обнаружение глобальных паттернов и менее склонна к изменениям, т.е. более консервативна. При использовании перекрестной проверки скользящим окном используется меньше данных, модель быстрее меняет поведение, т.е. менее консервативна. В ситуации, когда вы уверены, что процесс, генерирующий данные, изменился или неоднократно менялся в течение периода, охватывающего исторические данные, используйте перекрестную проверку скользящим окном.
+
+Для рынков товаров с низкой вовлеченностью (товаров повседневного спроса), в ситуации, когда вы уверены или у вас есть доказательства, что процесс, генерирующий данные, остается неизменным или претерпевает несущественные изменения, перекрестная проверка расширяющимся окном может быть более полезна.
+
+\remark{
+Важно помнить, что во временных рядах \emph{перекрестная проверка}, которую вы применяете, является \emph{прообразом} вашей \emph{производственной системы}. Если вы применяли для валидации перекрестную проверку расширяющимся окном, то и в производстве вы должны обучать модель на обучающей выборке возрастающего объема и обновлять в том же темпе, что обновляли в ходе перекрестной проверки (на весь горизонт прогнозирования, на половину горизонта и т.д.)
+}
+
+Наконец, поскольку в рамках перекрестной проверки расширяющимся окном мы на каждой итерации обучаем модель на выборке все большего объема, при использовании моделей на основе градиентного бустинга это может потребовать коррекции темпа обучения, количества деревьев и максимальной глубины. 
+
+\subsection{CatBoost. Базовая модель с конструированием признаков}
+
+В ETNA есть два класса-обертки над классом \texttt{CatboostRegressor}: \texttt{CatBoostModePerSegment} и \texttt{CatBoostModelMultiSegment}. Разница заключается в том, что класс \texttt{CatBoostModelPerSegment} обучает отдельную модель для каждого сегмента, а класс \texttt{CatBoostModelMultiSegment} -- одну модель для всех сегментов.
+
+Для создания признаков можно использовать классы-трансформеры:
+\begin{itemize}
+	\item \texttt{LagTransform} для генерации лагов,
+	
+	\item \texttt{MeanTransform} для вычисления скользящего среднего по заданному окну.
+\end{itemize}
+
+\remark{
+Ширина скользящего окна не должна превышать горизонт прогнозирования
+}
+
+С помощью параметра \verb|in_column| класса-трансформера задаем переменную, которую нужно преобразовать или на основе которой нужно создать признаки (по умолчанию этой переменной будет переменная \texttt{target}). С помощью параметра \verb|out_column| (этот параметр есть у всех классов-трансформеров, создающих признаки) можно задать имена генерируемых переменных.
+
+Для более надежной оценки качества модели следует восопользоваться \emph{перекрестной проверкой расширяющимся окном} с помощью класса \texttt{Pipeline}.
+
+Создадим список преобразований. В данном случае он включать формирование лагов и скользящего среднего на каждой итерации перекрестной проверки.
+
+\begin{lstlisting}[
+style = ironpython,
+numbers = none
+]
+lags = LagTransform(in_column="target", lags=list(range(8, 24, 1)), out_column="lag")
+mean8 = MeanTransform(in_column="target", window=8, out_column="mean8")
+transforms = [lags, mean8]
+\end{lstlisting}
+
+Теперь создаем конвейер для выполнения перекрестной проверки расширяющимся окном, передав в него модель, список процедур формирования признаков (лагов и скользящего среднего) и горизонт прогнозирования
+\begin{lstlisting}[
+style = ironpython,
+numbers = none
+]
+model = CatBoostModelMultiSegment()
+model.fit(train_ts)
+
+pipeline = Pipeline(
+    model=model,
+    transforms=transforms,
+    horizon=HORIZON,
+)
+# перекрестная проверка расширяющимся окном
+metrics_df, _, _ = pipeline.backtest(
+    ts=ts,
+    mode="expand",
+    metrics=[smape],
+)
+\end{lstlisting}
+
+Класс \texttt{Pipeline} можно использовать для перекрестной проверки сразу нескольких моделей
+\begin{lstlisting}[
+style = ironpython,
+numbers = none
+]
+# задаем конвейер преобразований для модели наивного прогноза
+naive_pipeline = Pipeline(
+    model=NaiveModel(lag=12), transforms=[], horizon=HORIZON)
+# задаем конвейер преобразований для Prophet
+prophet_pipeline = Pipeline(
+    model=ProphetModel(), transforms=[], horizon=HORIZON
+)
+# задаем конвейер преобразований для CatBoost
+catboost_pipeline = Pipeline(
+    model=CatBoostModelMultiSegment(),
+    transforms=[LagTransform(lags=[8, 9, 10, 11, 12], 
+    in_column='target')],
+    horizon=HORIZON
+)
+# задаем список имен конвейеров
+pipeline_names = ['naive', 'prophet', 'catboost']
+# задаем список конвейеров
+pipelines = [naive_pipeline, prophet_pipeline, catboost_pipeline]
+# задаем пустой список метрик
+metrics = []
+# записываем метрики в список
+for pipeline in pipelines:
+    metrics.append(
+        pipeline.backtest(
+        ts=ts, metrics=[MAE(), MSE(), SMAPE(), MAPE()], 
+        n_folds=3, aggregate_metrics=True
+    )[0].iloc[:, 1:]
+)
+
+# конкатенируем метрики
+metrics = pd.concat(metrics)
+# в качестве индекса используем список имен конвейеров
+metrics.index = pipeline_names
+\end{lstlisting}
+
+С помощью класса \texttt{VotingEnsemble} можно выполнить обучение и перекрестную проверку \emph{ансамбля моделей}. Веса моделей можно задавать с помощью параметра \texttt{weights}
+\begin{lstlisting}[
+style = ironpython,
+numbers = none
+]
+# создаем экземпляр класса VotingEnsemble
+voting_ensemble = VotingEnsemble(pipelines=pipelines, 
+weights=[1, 2, 4], 
+n_jobs=4)
+# получаем метрики
+voting_ensamble_metrics = voting_ensemble.backtest(
+    ts=ts,
+    metrics=[MAE(), MSE(), SMAPE(), MAPE()], 
+    n_folds=3,
+    aggregate_metrics=True,
+    n_jobs=2
+)[0].iloc[:, 1:]
+voting_ensamble_metrics.index = ['voting ensemble']
+\end{lstlisting}
+
+С помощью класса \texttt{StackingEnsemble} можно выполнить \emph{стекинг}. Мы прогнозируем будущее, используя метамодель (линейную регрессию по умолчанию) для объединения прогнозов моделей в списке конвейеров. С помощью параметров \verb|final_model| можно задать метамодель. С помощью \verb|features_to_use| можно задавать признаки для метамодели
+\begin{itemize}
+	\item \texttt{None}: метамодель в качестве признаков может использовать прогнозы моделей конвейеров,
+	
+	\item \texttt{List}: прогнозы моделей конвейеров плюс признаки из списка (в виде строковых значений),
+	
+	\item \texttt{"all"}: все доступные признаки.
+\end{itemize}
+
+С помощью параметра \texttt{cv} задаем количество тестовых выборок перекрестной выборки (используем не для оценки моделей, а для получения прогнозов, которые станут у нас потом признаками).
+
+Под капотом происходит примерно следующее. Допустим, запустили перекрестную проверку расширяющимся окном, получили 5 тестовых выборок, прогнозы каждой из модели конвейера в 5 тестовых выбоках стали признаками. Затем снова запускаем проверку расширяющимся окном, по этим признакам строим метамодель -- линейную регрессию, берем прогнозы в 3 тестовых выборках и усредняем
+\begin{lstlisting}[
+style = ironpython,
+numbers = none
+]
+# создаем экземпляр класса StackingEnsemble,
+# признаки - прогнозы конвейеров
+stacking_ensemble_unfeatured = StackingEnsemble(
+    features_to_use='None', pipelines=pipelines, 
+    n_folds=10, n_jobs=4)
+# выполняем стекинг
+stacking_ensamble_metrics = stacking_ensemble_unfeatured.backtest(
+    ts=ts, metrics=[MAE(), MSE(), SMAPE(), MAPE()], n_folds=3, 
+    aggregate_metrics=True, n_jobs=2)[0].iloc[:, 1:]
+stacking_ensamble_metrics.index = ['stacking ensemble']
+stacking_ensamble_metrics
+\end{lstlisting}
+
+\subsection{Пользовательские классы для вычисления скользящих статистик}
+
+Можно писать свои собственные классы для вычисления скользящих статистик и обучения моделей. Допустим, мы хотим использовать не только скользящие средние, но и скользящие средние абсолютные отклонения
+\begin{lstlisting}[
+style = ironpython,
+numbers = none
+]
+# пишем класс MadTransform, вычисляющий скользящие
+# средние абсолютные отклонения
+class MadTransform(WindowStatisticsTransform):
+    """
+    MadTransform вычисляет среднее абсолютное отклонение
+    (mean absolute deviation - mad) для заданного окна.
+    """
+		def __init__(
+			self,
+			in_column: str,
+			window: int,
+			seasonality: int = 1,
+			min_periods: int = 1,
+			fillna: float = 0,
+			out_column: Optional[str] = None
+		):
+		"""
+		Параметры
+		----------
+		in_column: str
+		имя обрабатываемого столбца
+		window: int
+		ширина окна для агрегирования
+		out_column: str, optional
+		имя результирующего столбца. Если не задано, 
+		используем __repr__()
+		seasonality: int
+		коэффициент сезонности
+		min_periods: int
+		Минимальное количество наблюдений в окне 
+		для агрегирования
+		fillna: float
+		значение для заполнения значений NaN
+		"""
+		self.in_column = in_column
+		self.window = window
+		self.seasonality = seasonality
+		self.min_periods = min_periods
+		self.fillna = fillna
+		self.out_column = out_column
+		super().__init__(
+		window=window,
+		in_column=in_column,
+		seasonality=seasonality,
+		min_periods=min_periods,
+		out_column=self.out_column 
+		if self.out_column is not None 
+		else self.__repr__(),
+		fillna=fillna,
+	)
+	def _aggregate_window(
+		self, series: pd.Series
+	) -> float:
+		"""Вычисляет mad для серии."""
+		tmp_series = self._get_required_lags(series)
+		return tmp_series.mad(**self.kwargs)
+\end{lstlisting}
+
+Теперь предположим, мы хотим использовать LightGBM вместо CatBoost. Нам понадобиться класс LGBRegressor и базовые классы библиотеки ETNA \texttt{Model} и \texttt{PerSegmentModel}.
+
+Сначала надо написать ядро -- внутренний класс \verb|_LBGMModel|, в котором используется \texttt{LGBMRegressor}. Символ нижнего подчеркивания указывает, что данный класс будет использоваться внутри других классов. У класса \verb|_LGBModel| будут два метода \texttt{fit()} и \texttt{predict()}.
+
+\begin{lstlisting}[
+style = ironpython,
+numbers = none
+]
+# пишем ядро - внутренний класс _LGBMModel,
+# внутри - класс LGBMRegressor
+class _LGBMModel:
+	def __init__(
+		self,
+		boosting_type='gbdt',
+		num_leaves=31,
+		max_depth=-1,
+		learning_rate=0.1,
+		n_estimators=100,
+		**kwargs
+	):
+		self.model=LGBMRegressor(
+			boosting_type=boosting_type,
+			num_leaves=num_leaves,
+			max_depth=max_depth,
+			learning_rate=learning_rate,
+			n_estimators=n_estimators,
+			**kwargs
+		)
+	def fit(self, df: pd.DataFrame):
+		features = df.drop(columns=['timestamp', 'target'])
+		target = df['target']
+		self.model.fit(X=features, y=target)
+		return self
+		
+	def predict(self, df: pd.DataFrame):
+		features = df.drop(columns=['timestamp', 'target'])
+		pred = self.model.predict(features)
+		return pred
+\end{lstlisting}
+
+Вспомним, что мы можем строить отдельную модель для каждого сегмента и одну модель для всего набора (т.е. всех сегментов). Значит мы можем написать два класса. Начнем с класса, который будет строить отдельную модель для каждого сегмента. Назовем его \texttt{LGBModelPerSegment}. Для этого воспользуемся наследованием, нам понадобится базовый класс \texttt{PerSegmentModel}
+
+\begin{lstlisting}[
+style = ironpython,
+numbers = none
+]
+# пишем класс LGBMModelPerSegment, который строит 
+# отдельную модель LGBM для каждого сегмента
+class LGBMModelPerSegment(PerSegmentModel):
+	def __init__(
+		self,
+		boosting_type='gbdt',
+		num_leaves=31,
+		max_depth=-1,
+		learning_rate=0.1,
+		n_estimators=100,
+		**kwargs
+	):
+		self.kwargs = kwargs
+		model = _LGBMModel(
+			boosting_type=boosting_type,
+			num_leaves=num_leaves,
+			max_depth=max_depth,
+			learning_rate=learning_rate,
+			n_estimators=n_estimators,
+			**kwargs
+		)
+		super(LGBMModelPerSegment, self).__init__(
+			base_model=model)
+\end{lstlisting}
+
+Теперь напишем класс, который будет строить одну модель для всех сегментов. Назовем его \texttt{LGBModelMultiSegment}. Для этого вновь воспользуемся наследованием, нам понадобится базовый класс \texttt{Model}
+
+\begin{lstlisting}[
+style = ironpython,
+numbers = none
+]
+# пишем класс LGBMModelMultiSegment, который строит 
+# одну модель LGBM для всех сегментов
+class LGBMModelMultiSegment(Model):
+	def __init__(
+		self,
+		boosting_type='gbdt',
+		num_leaves=31,
+		max_depth=-1,
+		learning_rate=0.1,
+		n_estimators=100,
+		**kwargs
+	):
+		self.kwargs = kwargs
+		super(LGBMModelMultiSegment, self).__init__()
+		self._base_model=_LGBMModel(
+			boosting_type=boosting_type,
+			num_leaves=num_leaves,
+			max_depth=max_depth,
+			learning_rate=learning_rate,
+			n_estimators=n_estimators,
+			**kwargs
+		)
+		
+	def fit(self, ts: TSDataset):
+		# превращаем TSDataset в датафрейм pandas
+		# с плоским индексом
+		df = ts.to_pandas(flatten=True)
+		df = df.dropna()
+		df = df.drop(columns='segment')
+		self._base_model.fit(df=df)
+		return self
+		
+	def forecast(self, ts: TSDataset):
+		result_list = list()
+		# собираем новый датафрейм с помощью self._forecast_segment
+		# из базового класса
+		for segment in ts.segments:
+			segment_predict = self._forecast_segment(
+				self._base_model, segment, ts)
+			result_list.append(segment_predict)
+			
+		result_df = pd.concat(result_list, ignore_index=True)
+		result_df = result_df.set_index(['timestamp', 'segment'])
+		
+		df = ts.to_pandas(flatten=True)
+		df = df.set_index(['timestamp', 'segment'])
+		# заменяем пропуски прогнозами
+		df = df.combine_first(result_df).reset_index()
+		df = TSDataset.to_dataset(df)
+		ts.df = df
+		# выполняем обратные преобразования
+		ts.inverse_transform()
+		
+		return ts
+\end{lstlisting}
+
+Аналогично можно реализовать XGBoost в ETNA. Пишем класс \verb|_XGBModel|
+\begin{lstlisting}[
+style = ironpython,
+numbers = none
+]
+class _XGBModel:
+    def __init__(
+        self,
+        booster="gbtree",
+        max_depth=3,
+        learning_rate=0.1,
+        n_estimators=100,
+        **kwargs,
+    ):
+        self.model=XGBRegressor(
+            booster=booster,
+            max_depth=max_depth,
+            learning_rate=learning_rate,
+            n_estimators=n_estimators,
+            **kwargs,
+        )
+        
+    def fit(
+        self,
+        df: pd.DataFrame,
+    ):
+        features = df.drop(columns=["timestamp", "target"])
+        for col in features.columns.tolist():
+            features[col] = features[col].astype("category").cat.codes
+        target = df["target"]
+        self.model.fit(X=features, y=target)
+        return self
+        
+    def predict(
+        self,
+        df: pd.DataFrame,
+    ):
+        features = df.drop(columns=["timestamp", "target"])
+        for col in features.columns.tolist():
+            features[col] = features[col].astype("category").cat.codes
+        pred = self.model.predict(features)
+        return pred
+\end{lstlisting}
+
+Пишем классы \texttt{XGBModePerSegment} и \texttt{XGBModelMultiSegment}
+\begin{lstlisting}[
+style = ironpython,
+numbers = none
+]
+# пишем класс XGBModelPerSegment, который строит 
+# отдельную модель XGB для каждого сегмента
+class XGBModelPerSegment(PerSegmentModel):
+	def __init__(
+		self,
+		booster='gbtree',
+		max_depth=3,
+		learning_rate=0.1,
+		n_estimators=200,
+		**kwargs
+	):
+	self.kwargs = kwargs
+	model = _XGBModel(
+		booster=booster,
+		max_depth=max_depth,
+		learning_rate=learning_rate,
+		n_estimators=n_estimators,
+		**kwargs
+	)
+	super(XGBModelPerSegment, self).__init__(
+		base_model=model)
+		
+# пишем класс XGBModelMultiSegment, который строит 
+# одну модель XGB для всех сегментов
+class XGBModelMultiSegment(Model):
+	def __init__(
+		self,        
+		booster='gbtree',
+		max_depth=3,
+		learning_rate=0.1,
+		n_estimators=100,
+		**kwargs
+	):
+		self.kwargs = kwargs
+		super(XGBModelMultiSegment, self).__init__()
+		self._base_model=_XGBModel(
+			booster=booster,
+			max_depth=max_depth,
+			learning_rate=learning_rate,
+			n_estimators=n_estimators,
+			**kwargs
+	)
+	
+	def fit(self, ts: TSDataset):
+		# превращаем TSDataset в датафрейм pandas
+		# с плоским индексом
+		df = ts.to_pandas(flatten=True)
+		df = df.dropna()
+		df = df.drop(columns='segment')
+		self._base_model.fit(df=df)
+		return self
+		
+	def forecast(self, ts: TSDataset):
+		result_list = list()
+		# собираем новый датафрейм с помощью 
+		# self._forecast_segment 
+		# из базового класса
+		for segment in ts.segments:
+			segment_predict = self._forecast_segment(
+				self._base_model, segment, ts)
+			result_list.append(segment_predict)
+			
+		result_df = pd.concat(result_list, ignore_index=True)
+		result_df = result_df.set_index(['timestamp', 'segment'])
+		
+		df = ts.to_pandas(flatten=True)
+		df = df.set_index(['timestamp', 'segment'])
+		# заменяем пропуски прогнозами
+		df = df.combine_first(result_df).reset_index()
+		df = TSDataset.to_dataset(df)
+		ts.df = df
+		# выполняем обратные преобразования
+		ts.inverse_transform()
+
+		return ts
+\end{lstlisting}
+
+\remark{
+Порядок лагов не должен быть меньше длины горизонта! Потому как в противном случае, признаки тествого поднабора данных, построенные на лагах, будут использовать информацию из целевой переменной тестового поднабора данных (утечка!)
+}
+
+Таким образом, необходимо создаватвь лаговые переменные так, чтобы они не проникали в тестовый набор. Лаги вида $ L_{t-k} $ лучше создавать так, чтобы $ k $ был равен или превышал горизонт прогнозирования (\pic{fig:lags}). Впрочем, допускается создание лагов, у которых порядок будет меньше длины горизонта прогнозирования, но тогда значения зависимой переменной в тестовой выборке нужно заменить на значение NaN. Если лаг и залезет в тест, ему ничего не останется, как использовать значение NaN, таким образом, в тесте появится значение NaN. В таком случае, чем больше горизонт прогнозирования будет превышать порядок лага, тем больше пропусков будет в тесте.
+
+На практике для избежания утечки данных при вычислении лагов (а также скользящих и расширяющихся статистик) поступают двумя способами:
+\begin{itemize}
+	\item значения зависимой переменной в наблюдениях исходного набора, которые будут соответствовать будущей тестовой выборке (набору новых данных), заменяют значениями NaN,
+	
+	\item берем обучающую выборку и удлиняем ее на длину горизонта прогнозирования, зависимая переменная в наблюдениях, соответсвтующих новым временным меткам (т.е. в тестовой выборке/наборе новых данных) получает значения NaN.
+\end{itemize}
+
+В обоих случаях мы формирум защиту от утечки при вычислении лагов в тестовой выборке / наборе новых данных.
+
+\begin{figure}[h]
+	\centering
+	\includegraphics[scale=0.4]{figures/lags.png}
+	\caption{ Лаги, у которых порядок равен горизонту прогнозирования или превышает его, не используют тестовую выборку }\label{fig:lags}
+\end{figure}
+
+
+
+Теперь создадим лаги, скользящее среднее, скользящее среднее абсолютное отклонение, обучим модель \texttt{LGBMModelMultiSegment}, получим прогнозы и визуализируем их
+\begin{lstlisting}[
+style = ironpython,
+numbers = none,
+]
+# создаем экземпляр класса LagTransform для генерации лагов,
+# с помощью in_column задаем переменную, на основе которой
+# генерируем лаги, мы будем генерировать лаги порядка от 8 до 23, 
+# порядок лагов не должен быть меньше длины горизонта
+lags = LagTransform(in_column='target', 
+				lags=list(range(8, 24, 1)), 
+				out_column='lag')
+# создаем экземпляр класса MeanTransform для вычисления 
+# скользящего среднего по заданному окну
+mean8 = MeanTransform(in_column='target', 
+				window=8, 
+				out_column='mean8')
+# создаем экземпляр класса MadTransform для вычисления 
+# среднего абсолютного отклонения по заданному окну
+mad8 = MadTransform(in_column='target',
+				window=8, 
+				out_column='mad8')
+# добавляем лаги, mean8, mad8 в обучающую выборку
+train_ts.fit_transform([lags, mean8, mad8])
+# создаем экземпляр класса LGBMModelPerSegment
+model = LGBMModelPerSegment()
+# обучаем модель
+model.fit(train_ts)
+# формируем тестовый набор
+future_ts = train_ts.make_future(HORIZON)
+# получаем прогнозы
+forecast_ts = model.forecast(future_ts)
+# оцениваем качество прогнозов
+smape(y_true=test_ts, y_pred=forecast_ts)
+\end{lstlisting}
+
+\subsection{Работа с несколькими временными рядами}
+
+Прогнозирование нескольких временных рядов. Загрузим набор, в котором каждому сегменту соответствует свой временной ряд
+\begin{lstlisting}[
+style = ironpython,
+numbers = none	
+]
+original_df = pd.read_csv("data.csv")
+original_df.head()
+
+df = TSDataset.to_dataset(original_df)
+\end{lstlisting}
+
+Вновь воспользуемся моделью CatBoost с помощью класса CatBoostModelMultiSegment. Перед построением модели выполним некоторые преобразования и создадим новые признаки для наших рядов.
+
+Нам понадобятся следующие классы-трансформеры:
+\begin{itemize}
+	\item класс \texttt{LogTransform} для логарифмирования и экспонецирования перерменной (логарифмирование позволяет сгладить негативное влияние выборосов объективной природы, помогает выделить тренд),
+	
+	\item \texttt{LinearTrendTransform} для прогнозирования тренда, удаления тренда из данных и добавления тренда к прогнозам (это необходимо для деревьев решений и для ансамблей деревьев решений, \underline{\emph{не умещющих экстраполировать}}),
+	
+	\item \texttt{LagTransform} для генерации лагов,
+	
+	\item \texttt{DateFlagsTransform} для генерации признаков на основе дат -- порядковый номер дня недели, порядковый номер дня месяца, порядковый номер недели в месяце и пр.,
+	
+	\item \texttt{MeanTransform} для вычисления скользящего среднего по заданному окну.
+\end{itemize}
+
+Сначала выполним логарифмирование зависимой переменной, а затем вычтем из нее тренд. Потом на основе пролагрифмированной зависимой переменной с удаленным трендом мы создадим лаги и скользящие средние, добавим календарные признаки.
+
+\begin{lstlisting}[
+style = ironpython,
+numbers = none
+]
+# создаем экземпляр класса LogTransform для логарифмирования 
+# и экспоненцирования зависимой переменной
+log = LogTransform(in_column='target')
+
+# создаем экземпляр класса LinearTrendTransform 
+# для прогнозирования тренда, удаления тренда из 
+# данных и добавления тренда к прогнозам
+trend = LinearTrendTransform(in_column='target')
+
+# создаем экземпляр класса SegmentEncoderTransform 
+# для кодирования меток сегментов целочисленными 
+# значениями в лексикографическом порядке (LabelEncoding): 
+# сегменты a, b, c, d получат значения 0, 1, 2, 3
+seg = SegmentEncoderTransform()
+
+# создаем экземпляр класса LagTransform 
+# для генерации лагов (c лага 31 по лаг 95)
+lags = LagTransform(in_column='target', 
+	lags=list(range(31, 96, 1)), 
+	out_column='lag')
+	
+# создаем экземпляр класса DateFlagsTransform для 
+# генерации признаков на основе дат - порядковый 
+# номер дня недели, порядковый номер дня месяца,
+# порядковый номер недели в месяце, порядковый 
+# номер недели в году, порядковый номер месяца 
+# в году, индикатор выходных дней
+d_flags = DateFlagsTransform(day_number_in_week=True,
+	day_number_in_month=True,
+	week_number_in_month=True,
+	week_number_in_year=True,
+	month_number_in_year=True,
+	special_days_in_week=[5, 6], 
+	out_column='datetime')
+	
+# создаем экземпляр класса MeanTransform для вычисления 
+# скользящего среднего по заданному окну
+mean30 = MeanTransform(in_column='target', 
+	window=30, 
+	out_column='mean30')
+\end{lstlisting}
+
+Разбиваем набор (наш объект TSDataset) на обучающую и тестовую выборки с учетом временной структуры. Здесь горизонт прогнозирования сосавит 31 день
+\begin{lstlisting}[
+style = ironpython,
+numbers = none
+]
+# разбиваем набор на обучающую и тестовую выборки 
+# с учетом временной структуры
+train_ts, test_ts = ts.train_test_split(
+    train_start="2019-01-01",
+    train_end="2019-11-30",
+    test_start="2019-12-01",
+    test_end="2019-12-31",
+)
+
+# выполняем преобразования набора
+train_ts.fit_transform([
+	log,  # логарифмируем
+	trend,  # удаляем тренд
+	lags,  # вычисляем лаги
+	d_flags,  # вычисляем признаки на основе дат
+	seg,  # кодируем метки сегментов
+	mean30  # вычисляем скользящее среднее
+])
+\end{lstlisting}
+
+Задаем явно горизонт в 31 день, обучаем модель CatBoost, оцениваем качество прогнозов и визуализируем прогнозы. Кроме того, не забываем выполнить обратные преобразования (добавление тренда, экспонецирование зависимой переменной) с помощью метода \texttt{.inverse\_transform()} для обучающего набора для правильной визуализации значений зависимой переменной в обучающей выборке.
+
+\begin{lstlisting}[
+style = ironpython,
+numbers = none
+]
+# задаем горизонт прогнозирования
+HORIZON = 31
+# создаем экземпляр класса CatBoostModelMultiSegment
+model = CatBoostModelMultiSegment()
+# обучаем модель CatBoost
+model.fit(train_ts)
+# формируем набор, для которого нужно получить прогнозы,
+# длина набора определяется горизонтом прогнозирования
+future_ts = train_ts.make_future(HORIZON)
+
+# получаем прогнозы
+forecast_ts = model.forecast(future_ts)
+
+# оцениваем качество прогнозов
+smape(y_true=test_ts, y_pred=forecast_ts)
+\end{lstlisting}
+
+Выполняем обратное преобразование для обратной выборки (добавляем тренд, делаем экспоненцирование переменной \texttt{target})
+\begin{lstlisting}[
+style = ironpython,
+numbers = none
+]
+train_ts.inverse_transform()
+plot_forecast(forecast_ts, test_ts, train_ts, n_train_sample=20)
+\end{lstlisting}
+
+Для более надежной оценки качества модели \texttt{CatBoost} воспользуемся \emph{перекрестной проверкой расширяющимся окном}
+\begin{lstlisting}[
+style = ironpython,
+numbers = none
+]
+pipe = Pipeline(
+    model=model,
+    transform=[
+        log,
+        trend,
+        seg,
+        lags,
+        d_flags,
+        mean30,
+    ],
+    horizon=HORIZON,
+)
+metrics, forecast, info = pipe.backtest(ts, [smape], aggregate_metrics=True)
+\end{lstlisting}
+
+Ансамбль бустингов
+\begin{lstlisting}[
+style = ironpython,
+numbers = none,
+]
+transforms = [log, trend, seg, lags, d_flags, mean30]
+catboost_pipeline = Pipeline(
+    model=CatBoostModelMultiSegment(),
+    transforms=transforms,
+    horizon=HORIZON
+)
+
+lightgbm_pipeline = Pipeline(
+    model=LGBMModelMultiSegment(),
+    transforms=transforms,
+    horizon=HORIZON
+)
+
+xgboost_pipeline = Pipeline(
+    model=XGBModelMultiSegment(learning_rate=0.2, n_estimators=500, max_depth=1),
+    transforms=transforms,
+    horizon=HORIZON
+)
+
+pipeline_names = ["catboost", "lightgbm", "xgboost"]
+pipelines = [catboost_pipeline, lightgbm_pipeline, xgboost_pipeline]
+
+voting_ensemble = VotingEnsemble(
+    pipelines=pipelines,
+    weight=[1, 1, 2],
+    n_jobs=1
+)
+
+metrics, forecast, _ = voting_ensemble.backtest(
+    ts=ts, metrics=[SMAPE()], n_folds=3, aggregate_metrics=True, n_jobs=1
+)
+\end{lstlisting}
+
+
+
+\section{Приемы работы с библиотекой Catboost}
 
 Онлайн документация пакета \url{https://catboost.ai/en/docs/concepts/python-reference_catboostregressor}.
 
@@ -409,6 +1192,19 @@ print(env.observation_space)  # Box([-4.8000002e+00 -3.4028235e+38 -4.1887903e-0
 BoostARoota \url{https://github.com/chasedehan/BoostARoota} -- алгоритм отобора признаков на базе экстримального градиентного бустинга в реализации XGBoost. Алгоритм требует гораздо меньших затрат времени на выполнение. Перед применением необходимо выполнить дамми-кодирование, поскольку базовая модель работает только с количественными признаками.
 
 Отбор признаков выполняется на обучающем поднаборе данных, поэтому предполагается, что массив меток и массив признаков \emph{обучающие}, а для проверки качества модели отбора признаков есть независимая, \emph{тестовая} выборка. Кроме того, если необходимо выбрать оптимальные значения гиперпараметров модели отбора признаков (например, значения гиперпараметров \texttt{cutoff}, \texttt{iters} и \texttt{delta}), то понадобиться еще \emph{проверочная} {выборка}.
+
+\section{Классический и байесовский бутстреп}
+
+Бутстреп является универсальным инструментом для оценки статистической точности. 
+
+Байесовский бутстреп это байевоский аналог классического бутстрапа. Вместо моделирования распределения выборки для статистики, оценивающей параметр, байесовский бутстреп моделирует \emph{апостериорное распределение параметра}. 
+
+Основная идея состоит в том, чтобы случайным образом извлекать наборы данных с \underline{возвращением} из обучающих данных так, чтобы каждая выборка имела тот же размер, что и исходное обучающее множество.Это делается $ B $ раз (скажем, $ B = 100 $), создавая $ B $ множеств бутстрепа. Затем мы заново аппроксимируем модель для каждого из множест бутстрепа и исследуем поведение аппроксимаций на $ B $ выборках.
+
+По выборке бутстрепа мы можем оценить любой аспект распределения $ S(\mathbf{Z}) $ (это любая величина, вычисленная по данным $ \mathbf{Z} $), например, его дисперсию
+\begin{align*}
+	\widehat{ Var }[ S(\mathbf{Z}) ] = \dfrac{1}{B - 1} \sum_{b=1}^{B} \Big( S(\mathbf{Z}^{*b})  - \bar{S}^* \Big)^2, \quad \bar{S}^{*} = \sum_b S( \mathbf{Z}^{*b} ) / B.
+\end{align*}
 
 \section{HDI}
 
