@@ -1518,7 +1518,9 @@ print(env.observation_space)  # Box([-4.8000002e+00 -3.4028235e+38 -4.1887903e-0
 	\caption{ Прямое распространение сигнала и обратное распространение градиента }\label{fig:backprop}
 \end{figure}
 
-\section{Пакетная нормировка}
+\section{Борьба с переобучением в нейронных сетях}
+
+\subsection{Нормировка}
 
 Пусть даны признаки $ X = \{X_1, \ldots, X_m\} $.
 
@@ -1537,6 +1539,58 @@ print(env.observation_space)  # Box([-4.8000002e+00 -3.4028235e+38 -4.1887903e-0
 \emph{нормировка}
 \begin{align*}
 	X = \dfrac{X - \mu}{\sqrt{\sigma^2}}
+\end{align*}
+
+\subsection{Инициализация весов}
+
+Инициализация весов:
+\begin{itemize}
+	\item нарушить симметричность (чтобы нейроны были разные),
+	
+	\item недопустить насыщение нейрона (почти всегда близок к 0 или 1),
+	
+	\item ключевая идея -- входы на все слои должны иметь одинаковую дисперсию (для избегания <<насыщения>> нейронов).
+\end{itemize}
+
+Инициализация по Ксавье [Glorot \& Bengio, 2010]
+\begin{align*}
+	w_{ij}^{(k)} \sim U \Bigg[ - \sqrt{ \dfrac{ 6 }{ n_{in}^{(k)} + n_{out}^{(k)}} }, + \sqrt{ \dfrac{ 6 }{ n_{in}^{(k)} + n_{out}^{(k)}} } \, \Bigg].
+\end{align*}
+
+Дисперсия весов
+\begin{align*}
+	D[ w_{ij}^{(k)} ] = \dfrac{ 2 }{ n_{in}^{(k)} + n_{out}^{(k)} }.
+\end{align*}
+
+Формула выведена в предположении, что нет нелинейностей, т.е. $ z^{(k+1)} = f(W^{(k)} z^{(k)}) \equiv W^{(k)} z^{(k)} $.
+
+Смотрим ошибку на отложенной выборке! Выбираем итерацию, на которой ошибка наименьшая (\pic{fig:lear_rate}).
+
+\begin{figure}[h]
+	\centering
+	\includegraphics[scale=0.5]{figures/lear_rate.png}
+	\caption{ Настройка темпа обучения }\label{fig:lear_rate}
+\end{figure}
+
+Увеличение размера пакета -- тот же эффект, что и уменьшение темпа обучения.
+
+\subsection{Продвинутая оптимизация}
+
+Стохастический градиент (надо случайно перемешивать данные перед каждой эпохой)
+\begin{align*}
+	w^{(t+1)} = w^{(t)} - \eta \, \nabla L^{(t)}(w^{(t)}).
+\end{align*}
+
+Стохастический градиент с моментом (Momentum)
+\begin{align*}
+	m^{(t+1)} = \rho \, m^{(t)} + \nabla L^{(t)}(w^{(t)}),\\
+	w^{(t+1)} = w^{(t)} - \eta \, m^{(t+1)} = \underbrace{ w^{(t)} - \eta \, \nabla L^{(t)}(w^{(t)}) }_{\text{\itshape стохастический градиент}}+ \underbrace{- \eta \, \rho \, m^{(t)}}_{\text{\itshape добавление инерции}}.
+\end{align*}
+
+Метод Нестерова
+\begin{align*}
+	m^{(t+1)} = \rho \, m^{(t)} + \nabla L^{(t)} (w^{(t)} - \eta \, m^{(t)}),\\
+	w^{(t+1)} = w^{(t)} - \eta \, m^{(t+1)} = w^{(t)} - \eta \, \nabla L^{(t)}(w^{(t)} + \underbrace{\color{blue} - \eta \, m^{(t)}}_{\text{\itshape\color{blue} смещение}}) + \underbrace{\color{blue} - \eta \, \rho \, m^{(t)} }_{\text{\itshape\color{blue} добавление инерции}}.
 \end{align*}
 
 \section{Графовые нейронные сети}
