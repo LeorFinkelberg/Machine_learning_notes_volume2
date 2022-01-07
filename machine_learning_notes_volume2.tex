@@ -1427,6 +1427,58 @@ MultiClass используется в задачах мультиклассов
 \end{align*}
 \end{itemize}
 
+
+\section{Приемы работы с решателем SCIP}
+
+Полезный ресурс \url{https://www.gams.com/37/docs/S_SCIP.html#INDEX_SCIP_2d__21_solver}
+
+Пример конфигурационного файла настроек решателя (если файл \texttt{scip.set} лежит в директории, из-под которой запускается сеанс SCIP, то этот файл будет использован для настройки сеанса)
+\begin{lstlisting}[
+title = {\sffamily scip.set},
+style = bash,
+numbers = none
+]
+propagating/probing/maxprerounds = 0
+separating/maxrounds = 0
+separating/maxroundsroot = 0
+\end{lstlisting}
+
+\subsection{Emphasis Settings}
+
+SCIP поддреживает следующие настройки выразительности (emphasis):
+\begin{itemize}
+	\item \texttt{set emphasis easycip}: для простых проблем,
+	
+	\item \texttt{set emphasis feasibility}: для поиска осуществимого решения,
+	
+	\item \texttt{set emphasis hardlp}: для решения LP-трудных задач,
+	
+	\item \texttt{set emphasis optimality}: для доказательства оптимальности,
+	
+	\item \texttt{set emphasis numerics}: для повышения численной устойчивости,
+	
+	\item \texttt{set heuristics emphasis aggressive}: для агрессивного применения первичных эверистк,
+	
+	\item \texttt{set heuristics emphasis fast}: будут использованы только быстрые эвристики,
+	
+	\item \texttt{set heuristics emphasis off}: отключает все первичные эвристики,
+	
+	\item \texttt{set presolving emphasis aggressive}: для агрессивной предобработки,
+	
+	\item \texttt{set presolving emphasis fast}: для будут использованы только быстрые шаги предобработки,
+	
+	\item \texttt{set presolving emphasis off}: отключает предобработку,
+	
+	\item \texttt{set separaing emphasis aggressive}: для агрессивного использования разделителей,
+	
+	\item \texttt{set separating emphasis fast}: будут использованы только быстрые разделители,
+	
+	\item \texttt{set separating emphasis off}: отключает все разделители.
+\end{itemize}
+
+
+
+
 \section{Приемы работы с библиотеками Gym и Ecole}
 
 \subsection{Gym}
@@ -1490,6 +1542,57 @@ print(env.observation_space)  # Box([-4.8000002e+00 -3.4028235e+38 -4.1887903e-0
 Класс \texttt{ecole.observation.NodeBipartiteObs}: двудольный граф наблюдений для узлов branch-and-bound дерева. Оптимизационная задача представляется в виде гетерогенного двудольного графа. Между переменной и ограничением будет существовать ребро, если переменная присутствует в ограничении с ненулевым коэффициентом.
 
 Метод \texttt{reset()} в Ecole принимает в качестве аргумента экземпляр проблемы. 
+
+\subsubsection{Анализ примера работы связки Ecole+GNN}
+
+В рассматриваемом примере проводится анализ упрощенной реализации решения Gasse et al. (2019). Мы будем использовать генератор экземпляров, предоставленный Ecole
+\begin{lstlisting}[
+style = ironpython,
+numbers = none
+]
+instances = ecole.instance.SetCoverGenerator(n_rows=500, n_cols=1000, density=0.05)
+\end{lstlisting}
+
+В схеме <<исследование, а затем сильное ветвление>>, чтобы разнообразить состояния, в которых мы собираем примеры сильного ветвления, мы в основном следуем за слабым, но дешевым экспертом (pseudocost branching) и лишь изредка вызываем сильного эксперта (strong branching). Это также гарантирует, что выборки будут ближе к тому, чтобы быть независимыми и одинаково распределенными.
+
+Это можеть быть реализовано в Ecole путем создания пользовательской функции наблюдения (observation function), которая будет случайным образом вычислять и возвращать оценки псевдооценки (дешево) или оценки сильного ветвления (дорого)
+\begin{lstlisting}[
+style = ironpython,
+numbers = none	
+]
+class ExploreThenStrongBranch:
+	"""
+	This custom observation function class will randomly return either strong branching scores (expensive expert)
+	or pseudocost scores (weak expert for exploration) when called at every node.
+	"""
+
+	def __init__(self, expert_probability):
+		self.expert_probability = expert_probability
+		self.pseudocosts_function = ecole.observation.Pseudocosts()
+		self.strong_branching_function = ecole.observation.StrongBranchingScores()
+
+	def before_reset(self, model):
+		"""
+		This function will be called at initialization of the environment (before dynamics are reset).
+		"""
+		self.pseudocosts_function.before_reset(model)
+		self.strong_branching_function.before_reset(model)
+
+	def extract(self, model, done):
+		"""
+		Should we return strong branching or pseudocost scores at time node?
+		"""
+		probabilities = [1 - self.expert_probability, self.expert_probability]
+		expert_chosen = bool(np.random.choice(np.arange(2), p=probabilities))
+		if expert_chosen:
+			return (self.strong_branching_function.extract(model, done), True)
+		else:
+			return (self.pseudocosts_function.extract(model, done), False)
+\end{lstlisting}
+
+
+
+
 
 \section{Нейронные сети}
 
