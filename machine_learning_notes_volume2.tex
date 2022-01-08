@@ -1443,6 +1443,12 @@ separating/maxrounds = 0
 separating/maxroundsroot = 0
 \end{lstlisting}
 
+\subsection{Общие сведения}
+
+Задачи линейного программирования в частично-целочисленной линейной постановке относятся к классу NP-трудных. Это означает, что мы знаем ни одного алгоритма, способного решать задачи такого типа за время, которое масштабируется как полином от длины входа (от размера задачи).
+
+Выбор правила выбора переменной играет фундаментальную роль в разработке алгоритмов и оказывает значительное влияние на время решения.
+
 \subsection{Emphasis Settings}
 
 SCIP поддреживает следующие настройки выразительности (emphasis):
@@ -1537,6 +1543,35 @@ print(env.observation_space)  # Box([-4.8000002e+00 -3.4028235e+38 -4.1887903e-0
 
 Полезный ресурс по математической оптимизации \url{https://scipbook.readthedocs.io/en/latest/}
 
+\subsubsection{Общие сведения}
+
+Обучение с подкреплением это уникальная парадигма машинного обучения в силу особенностей формулировки цели на базе системы вознаграждения.
+
+Гипотеза о вознаграждении: цель агента -- максимизировать накполенную сумму вознаграждений.
+
+На каждом шаге агент выбирает действие, базируясь на политике $ \pi(s) $. Эта политика может быть детерминированной и в этом случае она становится просто отображением состояний на действия.
+
+Однако, как правило политика стохастическая, что означает, что каждому состоянию назначается функция распределения вероятностей по пространству действий
+\begin{align*}
+	\pi (a | s) := \mathbb{P} (A_t = a | S_t = s).
+\end{align*}
+
+Цель агента состоит в том, чтобы максимизировать накопленное вознаграждение
+\begin{align*}
+	G_t := \sum_{k=t+1}^T \gamma^{k-t-1} R_k,
+\end{align*}
+где $ \gamma \in [0, 1] $ -- коэффициент дисконтирования.
+
+Таким образом, $ \gamma $ определяет компромисс между немедленным и будущим вознаграждением. Это формализует идею о том, что действия влияют на последующие состояния и, следовательно, имеют последствия, выходящие за рамки мгновенного вознаграждения. 
+
+Линейное программирование в частично-целочисленной постановке (Mixed Integer Linear Program, MILP) это проблема линейного программирования, когда и ограничения и целевая функция линейные, а некоторые переменные могут принимать целочисленные значения.
+
+Задачи MILP относятсу к классу NP-трудных. На практике это означает, что на текущий момент не известно алгоритмов, способных решить задачу за полиномиальное время.
+
+\emph{Секущие плоскости} были одним из первых предложенных решений для борьбы с MILP. Ключевая идея состоит в том, чтобы начать с естественной  линейной релаксации допустимых множеств и постепенно ужесточать эту релаксацию, отбрасывая области , которые не являются частью выпуклой оболочки. Этот подход сводит MILP к последовательному решению задач линейного программирования.
+
+
+
 \subsubsection{Observations}
 
 Класс \texttt{ecole.observation.NodeBipartiteObs}: двудольный граф наблюдений для узлов branch-and-bound дерева. Оптимизационная задача представляется в виде гетерогенного двудольного графа. Между переменной и ограничением будет существовать ребро, если переменная присутствует в ограничении с ненулевым коэффициентом.
@@ -1590,6 +1625,291 @@ class ExploreThenStrongBranch:
 			return (self.pseudocosts_function.extract(model, done), False)
 \end{lstlisting}
 
+\begin{lstlisting}[
+style = ironpython,
+numbers = none
+]
+# We can pass custom SCIP parameters easily
+scip_parameters = {
+	"separating/maxrounds": 0,
+	"presolving/maxrestarts": 0,
+	"limits/time": 3600,
+}
+
+# Note how we can tuple observation functions to return complex state information
+env = ecole.environment.Branching(
+	observation_function=(
+		ExploreThenStrongBranch(expert_probability=0.05),
+		ecole.observation.NodeBipartite(),
+	),
+	scip_params=scip_parameters,
+)
+
+# This will seed the environment for reproducibility
+env.seed(0)
+\end{lstlisting}
+
+\begin{lstlisting}[
+style = ironpython,
+numbers = none
+]
+episode_counter, sample_counter = 0, 0
+Path("samples/").mkdir(exist_ok=True)
+
+# We will solve problems (run episodes) until we have saved enough samples
+while sample_counter < DATA_MAX_SAMPLES:
+	episode_counter += 1
+
+	observation, action_set, _, done, _ = env.reset(next(instances))
+	while not done:
+		(scores, scores_are_expert), node_observation = observation
+		action = action_set[scores[action_set].argmax()]
+
+		# Only save samples if they are coming from the expert (strong branching)
+		if scores_are_expert and (sample_counter < DATA_MAX_SAMPLES):
+			sample_counter += 1
+			data = [node_observation, action, action_set, scores]
+			filename = f"samples/sample_{sample_counter}.pkl"
+
+			with gzip.open(filename, "wb") as f:
+				pickle.dump(data, f)
+
+		observation, action_set, _, done, _ = env.step(action)
+
+	print(f"Episode {episode_counter}, {sample_counter} samples collected so far")
+\end{lstlisting}
+
+Обучение графовой нейронной сети
+\begin{lstlisting}[
+style = ironpython,
+numbers = none
+]
+DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+\end{lstlisting}
+
+\begin{lstlisting}[
+style = ironpython,
+numbers = none
+]
+class BipartiteNodeData(torch_geometric.data.Data):
+	"""
+	This class encode a node bipartite graph observation as returned by the `ecole.observation.NodeBipartite`
+	observation function in a format understood by the pytorch geometric data handlers.
+	"""
+
+	def __init__(
+		self,
+		constraint_features,
+		edge_indices,
+		edge_features,
+		variable_features,
+		candidates,
+		nb_candidates,
+		candidate_choice,
+		candidate_scores,
+	):
+		super().__init__()
+		self.constraint_features = constraint_features
+		self.edge_index = edge_indices
+		self.edge_attr = edge_features
+		self.variable_features = variable_features
+		self.candidates = candidates
+		self.nb_candidates = nb_candidates
+		self.candidate_choices = candidate_choice
+		self.candidate_scores = candidate_scores
+
+	def __inc__(self, key, value, store, *args, **kwargs):
+		"""
+		We overload the pytorch geometric method that tells how to increment indices when concatenating graphs
+		for those entries (edge index, candidates) for which this is not obvious.
+		"""
+		if key == "edge_index":
+			return torch.tensor(
+				[[self.constraint_features.size(0)], [self.variable_features.size(0)]]
+			)
+		elif key == "candidates":
+			return self.variable_features.size(0)
+		else:
+			return super().__inc__(key, value, *args, **kwargs)
+
+
+class GraphDataset(torch_geometric.data.Dataset):
+	"""
+	This class encodes a collection of graphs, as well as a method to load such graphs from the disk.
+	It can be used in turn by the data loaders provided by pytorch geometric.
+	"""
+
+	def __init__(self, sample_files):
+		super().__init__(root=None, transform=None, pre_transform=None)
+		self.sample_files = sample_files
+
+	def len(self):
+		return len(self.sample_files)
+
+	def get(self, index):
+		"""
+		This method loads a node bipartite graph observation as saved on the disk during data collection.
+		"""
+		with gzip.open(self.sample_files[index], "rb") as f:
+			sample = pickle.load(f)
+
+		sample_observation, sample_action, sample_action_set, sample_scores = sample
+
+		constraint_features = sample_observation.row_features
+		edge_indices = sample_observation.edge_features.indices.astype(np.int32)
+		edge_features = np.expand_dims(sample_observation.edge_features.values, axis=-1)
+		variable_features = sample_observation.column_features
+
+		# We note on which variables we were allowed to branch, the scores as well as the choice
+		# taken by strong branching (relative to the candidates)
+		candidates = np.array(sample_action_set, dtype=np.int32)
+		candidate_scores = np.array([sample_scores[j] for j in candidates])
+		candidate_choice = np.where(candidates == sample_action)[0][0]
+
+		graph = BipartiteNodeData(
+			torch.FloatTensor(constraint_features),
+			torch.LongTensor(edge_indices),
+			torch.FloatTensor(edge_features),
+			torch.FloatTensor(variable_features),
+			torch.LongTensor(candidates),
+			len(candidates),
+			torch.LongTensor([candidate_choice]),
+			torch.FloatTensor(candidate_scores)
+		)
+
+		# We must tell pytorch geometric how many nodes there are, for indexing purposes
+		graph.num_nodes = constraint_features.shape[0] + variable_features.shape[0]
+
+		return graph
+\end{lstlisting}
+
+Архитектура нейронной сети
+\begin{lstlisting}[
+style = ironpython,
+numbers = none
+]
+class GNNPolicy(torch.nn.Module):
+	def __init__(self):
+		super().__init__()
+		emb_size = 64
+		cons_nfeats = 5
+		edge_nfeats = 1
+		var_nfeats = 19
+
+	# CONSTRAINT EMBEDDING
+	self.cons_embedding = torch.nn.Sequential(
+		torch.nn.LayerNorm(cons_nfeats),
+		torch.nn.Linear(cons_nfeats, emb_size),
+		torch.nn.ReLU(),
+		torch.nn.Linear(emb_size, emb_size),
+		torch.nn.ReLU(),
+	)
+
+	# EDGE EMBEDDING
+	self.edge_embedding = torch.nn.Sequential(
+		torch.nn.LayerNorm(edge_nfeats),
+	)
+
+	# VARIABLE EMBEDDING
+	self.var_embedding = torch.nn.Sequential(
+		torch.nn.LayerNorm(var_nfeats),
+		torch.nn.Linear(var_nfeats, emb_size),
+		torch.nn.ReLU(),
+		torch.nn.Linear(emb_size, emb_size),
+		torch.nn.ReLU(),
+	)
+
+	self.conv_v_to_c = BipartiteGraphConvolution()
+	self.conv_c_to_v = BipartiteGraphConvolution()
+
+	self.output_module = torch.nn.Sequential(
+		torch.nn.Linear(emb_size, emb_size),
+		torch.nn.ReLU(),
+		torch.nn.Linear(emb_size, 1, bias=False),
+	)
+
+	def forward(
+		self, constraint_features, edge_indices, edge_features, variable_features
+	):
+		reversed_edge_indices = torch.stack([edge_indices[1], edge_indices[0]], dim=0)
+
+		# First step: linear embedding layers to a common dimension (64)
+		constraint_features = self.cons_embedding(constraint_features)
+		edge_features = self.edge_embedding(edge_features)
+		variable_features = self.var_embedding(variable_features)
+
+	# Two half convolutions
+	constraint_features = self.conv_v_to_c(
+		variable_features, reversed_edge_indices, edge_features, constraint_features
+	)
+	variable_features = self.conv_c_to_v(
+		constraint_features, edge_indices, edge_features, variable_features
+	)
+
+	# A final MLP on the variable features
+	output = self.output_module(variable_features).squeeze(-1)
+	return output
+
+
+class BipartiteGraphConvolution(torch_geometric.nn.MessagePassing):
+	"""
+	The bipartite graph convolution is already provided by pytorch geometric and we merely need
+	to provide the exact form of the messages being passed.
+	"""
+
+	def __init__(self):
+		super().__init__("add")
+		emb_size = 64
+
+		self.feature_module_left = torch.nn.Sequential(
+			torch.nn.Linear(emb_size, emb_size)
+		)
+		self.feature_module_edge = torch.nn.Sequential(
+			torch.nn.Linear(1, emb_size, bias=False)
+		)
+		self.feature_module_right = torch.nn.Sequential(
+			torch.nn.Linear(emb_size, emb_size, bias=False)
+		)
+		self.feature_module_final = torch.nn.Sequential(
+			torch.nn.LayerNorm(emb_size),
+			torch.nn.ReLU(),
+			torch.nn.Linear(emb_size, emb_size),
+		)
+		
+		self.post_conv_module = torch.nn.Sequential(torch.nn.LayerNorm(emb_size))
+		
+		# output_layers
+		self.output_module = torch.nn.Sequential(
+			torch.nn.Linear(2 * emb_size, emb_size),
+			torch.nn.ReLU(),
+			torch.nn.Linear(emb_size, emb_size),
+		)
+
+	def forward(self, left_features, edge_indices, edge_features, right_features):
+		"""
+		This method sends the messages, computed in the message method.
+		"""
+		output = self.propagate(
+			edge_indices,
+			size=(left_features.shape[0], right_features.shape[0]),
+			node_features=(left_features, right_features),
+			edge_features=edge_features,
+		)
+		return self.output_module(
+			torch.cat([self.post_conv_module(output), right_features], dim=-1)
+		)
+
+	def message(self, node_features_i, node_features_j, edge_features):
+		output = self.feature_module_final(
+			self.feature_module_left(node_features_i)
+			+ self.feature_module_edge(edge_features)
+			+ self.feature_module_right(node_features_j)
+		)
+		return output
+
+
+policy = GNNPolicy().to(DEVICE)
+\end{lstlisting}
 
 
 
