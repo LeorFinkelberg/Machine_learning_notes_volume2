@@ -2269,6 +2269,11 @@ gurobi> help(m)
 # вывести 2-картежи целочисленных переменных с отличным от нуля значением
 gurobi> [(var.varName, var.x) for var in vars if (var.x > 0) and (var.vType == "I")]
 gurobi> m.write("res.sol")  # записать решение
+gurobi> help(GRM.param)  # параметры GUROBI
+gurobi> m.getParamInfo("TimeLimit")  # ('TimeLimit', <class 'float'>, inf, 0.0, inf, inf)
+gurobi> m.getParamInfo("MIPGap")  # ('MIPGap', <class 'float'>, 0.0001, 0.0, inf, 0.0001)
+gurobi> m.setParam("MIPGap", 65)
+gurobi> m.setParam("TimeLimit", 100)
 \end{lstlisting}
 
 
