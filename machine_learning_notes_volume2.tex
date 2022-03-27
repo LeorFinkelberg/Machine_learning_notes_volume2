@@ -2284,6 +2284,82 @@ policy = GNNPolicy().to(DEVICE)
 	\caption{ Прямое распространение сигнала и обратное распространение градиента }\label{fig:backprop}
 \end{figure}
 
+\section{Приемы работы с библиотекой \texttt{marshmallow}}
+
+\emph{Сериализация} ({dumping}) -- это процедура преобразования объекта или дерева объектов в какой-либо формат, по которому потом эти объекты можно восстановить. Используется, например, для сохранения состояния программы (то есть некоторых ее объектов) между запусками. Или для передачи данных по сети. 
+
+Основная идея заключается в том, что сериализованный формат -- это \emph{последовательность байт} или \emph{строка}.
+
+Обратная процедура называется \emph{десериализацией} (loading).
+
+Например, для сериализации с помощью модуля \texttt{json} можно поступить так
+\begin{lstlisting}[
+style = ironpython,
+numbers = none
+]
+import json
+
+d = {"key1": 10, "key2": 20}
+
+# для преобрзвания дерева объектов в последовательность байтов
+with open("./make_json.json", mode="w") as f:
+    json.dump(d, fp=f) # словарь -> файл
+
+# для преобразования дерева объектов в строку
+json.dumps(d)  # вернет строку '{"key1": 10, "key2": 20}'
+\end{lstlisting}
+
+Объявим класс данных
+\begin{lstlisting}[
+style = ironpython,
+numbers = none
+]
+from marshmallow import Schema, fields, validate, ValidationError
+
+# объявляем структуру данных
+class PersonSchema(Schema):
+    name = fields.String(
+        required=True,
+        validate=validate.Regexp("^Le.*$")
+    )
+    age = fields.Integer(
+        required=True,
+        validate=validate.Range(min=18, max=45)
+    )
+    job = fields.String(
+        required=False,
+        validate=validate.Length(min=3)
+    )
+    email = fields.Email(required=False)
+    sex = fields.String(load_default="male")  # это значение по умолчанию будет использоваться на шаге десериализации
+
+# проверка на согласованность 
+person_leor = PersonSchema().load({
+    "name": "Leor",
+    "age": 35,
+    "job": "Data Scientist",
+    "email": "leor.finkelberg@yandex.ru",
+})
+
+type(person_leor)  # dict
+\end{lstlisting}
+
+Если переданный словарь отвечает стуктуре данных, то метод \verb*|load()| класса \verb*|PersonSchema| этот же словарь и вернет. Но если хотя бы одно значение нарушает требования поля, то будет возбуждено исключение \verb*|ValidationError|. Поэтому строки вызова метода \verb*|load| следует оборачивать с помощью \verb*|try-except|
+\begin{lstlisting}[
+style = ironpython,
+numbers = none	
+]
+schema = PersonSchema()
+leor = {"name": "Leor", ...}
+try:
+    # метод load прогоняет словарь через структуру данных
+    # и если все хорошо, то этот же словарь и возвращает
+    person_leor: dict = PersonSchema().load(leor)
+except ValidationError as err:
+    print(err.messages, err.valid_data)
+\end{lstlisting}
+
+
 \section{Борьба с переобучением в нейронных сетях}
 
 \subsection{Нормировка}
