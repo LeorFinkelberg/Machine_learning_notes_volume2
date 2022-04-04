@@ -1883,6 +1883,42 @@ df.select([
 
 Сумма вычисляется по группе и транслируется на все элементы группы.
 
+Приклеить столбец справа можно с помощью метода \texttt{hstack}
+\begin{lstlisting}[
+style = ironpython,
+numbers = none
+]
+df: pl.DataFrame
+df.hstack([
+    pl.Series("new_col", np.random.randint(10, 100, size=df.height))
+])
+\end{lstlisting}
+
+Вставить столбец в произвольную позицию можно так
+\begin{lstlisting}[
+style = ironpython,
+numbers = none
+]
+# insert_at_idx изменяет объект на месте
+df.insert_at_idx(0, pl.Series("new_col", np.random.randn(df.heigth)))
+\end{lstlisting}
+
+\subsection{Работа с временными рядами}
+
+Pandas-конструкцию \verb*|ts.resample(...).agg(...)| силами Polars можно реализовать так
+\begin{lstlisting}[
+style = ironpython,
+numbers = none
+]
+ts.groupby_dynamic(
+    "time_stamp",
+    every="4h",
+    closed="left",
+).agg([
+    pl.col("value").count().alias("value_cnt"),
+    pl.col("value").mean().suffix("_mean"),
+])
+\end{lstlisting}
 
 
 \section{Приемы работы с библиотекой Catboost}
