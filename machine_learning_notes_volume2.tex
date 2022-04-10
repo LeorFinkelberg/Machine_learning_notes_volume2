@@ -1428,6 +1428,497 @@ data[name + "_cb"] = (gb["target"].cumsum() - data["target"]) / gb.cumcount()
 	\item есть и другие подходы и удобные библиотеки (SHAP, например).
 \end{itemize}
 
+\section{Приемы работы с библиотекой Polars}
+
+\subsection{Уствновка}
+
+Установить библиотеку Polars \url{https://www.pola.rs/} можно с помощью мендежера пакетов \texttt{pip}
+\begin{lstlisting}[
+style = ironpython,
+numbers = none
+]
+pip install polars
+\end{lstlisting}
+
+С библиотекой Polars удобнее работать, использую оболочку \texttt{ptpython}.
+
+\subsection{Вводные замечания}
+
+Polars поддерживает режимы \emph{жадных} (eager)\footnote{В этом режиме работа с данными выглядит как в pandas} и \emph{отложенных} (lazy) вычислений.
+
+Пример
+\begin{lstlisting}[
+style = ironpython,
+numbers = none	
+]
+import polars as pl
+
+df = pl.read_csv("https://j.mp/iriscsv")
+print(
+	df.filter(pl.col("sepal_length") > 5)
+	.groupby("species")
+	.agg(pl.all().sum())
+)
+\end{lstlisting}
+
+Или в <<отложенном>> режиме
+\begin{lstlisting}[
+style = ironpython,
+numbers = none
+]
+import polars as pl
+
+print(
+	pl.read_csv("https://j.mp/iriscsv")
+	.lazy()  # набор данных сразу не загружается!
+	.filter(pl.col("sepal_length") > 5)
+	.groupby("species")
+	.agg(pl.all().sum())
+	.collect()
+)
+\end{lstlisting}
+
+На Pandas этот запрос выглядел бы так
+\begin{lstlisting}[
+style = ironpython,
+numbers = none
+]
+import numpy as np
+import pandas as pd
+
+df = pd.read_csv("https://j.mp/iriscsv")
+df.loc[df.loc[:, "sepal_length"] > 5].groupby("species").agg(np.sum)
+\end{lstlisting}
+
+Если набор данных храниться \underline{\itshape локально}, то можно воспользоваться семейством функций \texttt{scan\_**}
+\begin{lstlisting}[
+style = ironpython,
+numbers = none
+]
+pl.scan_csv("./iris.csv").\
+    select(["sepal_width", "petal_width"]).\
+    filter(pl.col("sepal_width") > 3.5).\
+    collect()
+\end{lstlisting}
+
+Lazy API создает план выполнения запроса. Никакой шаг пайплайна не выполняется пока мы явно попросим Polars выполнить запрос (с помощью \verb*|LazyFrame.collect()| или \verb*|LazyFrame.fetch()|). Этот прием дает возможность Polars проанализировать весь запрос и выбрать наиболее подходящий по контексту алгоритм вычислений.
+
+
+Чтобы перейти от жадного режима к ленивому достаточно просто начать запрос с \verb*|.lazy()|, а закончить \verb*|.collect()|.
+
+\subsection{Polars-выражения}
+
+Метод \texttt{filter} отбирает строки, а метод \texttt{select} -- столбцы.
+
+Polars поддерживает очень мощную концепцию выражений. Рассмотрим несколько примеров
+\begin{lstlisting}[
+style = ironpython,
+numbers = none,
+]
+out = df.select([
+    pl.col("name").n_unique().alias("unique_names_1"),
+    pl.col("name").unique().count().alias("unique_names_2")
+])
+\end{lstlisting}
+
+Можно вызывать различные агрегаторы на объекте солбца
+\begin{lstlisting}[
+style = ironpython,
+numbers = none
+]
+df.select(pl.col("name").std())
+df.select(pl.col("name").max())
+\end{lstlisting}
+
+Можно выбирать столбцы по регулярному выражению
+\begin{lstlisting}[
+style = ironpython,
+numbers = none
+]
+df.select(r"^Type\s{1}\d{1}$")  # выбирет столбцы 'Type 1', 'Type 2' etc.
+\end{lstlisting}
+
+Можно использовать фильтры и условия. В фильтр передается булева маска
+\begin{lstlisting}[
+style = ironpython,
+numbers = none
+]
+df.select([
+    pl.col("species").filter(
+        pl.col("species").str.contains(r".*osa$")
+    ).count() # count() -- это метод объекта столбца
+])  # 50
+\end{lstlisting}
+
+На Pandas этот запрос выглядел бы так
+\begin{lstlisting}[
+style = ironpython,
+numbers = none
+]
+df.loc[
+    df.loc[:, "species"].str.contains(r".*osa$")  # вернет булеву маску
+]["species"].count()  # 50
+
+# или так
+df.loc[
+    df.loc[:, "species"].str.contains(r".*osa$")  # вернет булеву маску
+].shape[0]  # 50
+\end{lstlisting}
+
+Можно использовать конструкцию \emph{when} $ \rightarrow $ \emph{then} $ \rightarrow $ \emph{otherwise}
+\begin{lstlisting}[
+style = ironpython,
+numbers = none	
+]
+df.select([
+    pl.when(pl.col("petal_length") > 3)
+    .then(100)
+    .otherwise(pl.col("sepal_width") * 10) * pl.col("sepal_length").sum()
+])
+\end{lstlisting}
+
+На Pandas запрос выглядел бы так
+\begin{lstlisting}[
+style = ironpython,
+numbers = none
+]
+np.where(
+    df.loc[:, "petal_length"] > 3,
+    100,
+    df.loc[:, "sepal_width"] * 10
+) * df.loc[:, "sepal_length"].sum()
+\end{lstlisting}
+
+Еще пример
+\begin{lstlisting}[
+style = ironpython,
+numbers = none
+]
+# Polars
+(
+    df
+    .lazy()
+    .groupby("species")
+    .agg(pl.all().sum())
+    .select(["species", "petal_length"])
+    .collect()
+)
+
+# Pandas
+(
+    df
+    .groupby("species")
+    .agg(np.sum)[["species", "petal_lenth"]]
+)
+\end{lstlisting}
+
+Пример группировки с последующим построением агрегата
+\begin{lstlisting}[
+style = ironpython,
+numbers = none
+]
+df.groupby("species").agg([
+    pl.col("sepal_width").mean(),
+    pl.col("petal_length").max(),
+]).sort("species")
+\end{lstlisting}
+
+На Pandas
+\begin{lstlisting}[
+style = ironpython,
+numbers = none
+]
+df.groupby("species").agg({
+    "sepal_width": np.mean,
+    "petal_length": np.max,
+}).sort_index()
+\end{lstlisting}
+
+Если нужны склеить поэлементно строковые столбцы, то лучше воспользоваться функцией \verb*|pl.concat_str([...])|, а не fold-выражением, так как из-за материализации промежуточных столбцов у fold-выражений будет квадратичная временная сложность
+\begin{lstlisting}[
+style = ironpython,
+numbers = none
+]
+df.select([
+    pl.concat_str(["a", "b"])  # "a" и "b" это имена столбцов
+])
+\end{lstlisting}
+
+Polars-выражения нельзя использовать везде. Вот допустимые \emph{контексты}:
+\begin{itemize}
+	\item \verb*|df.select([...])|
+	
+	\item \verb*|df.groupby(...).agg([...])|
+	
+	\item \verb*|df.with_columns([...])|
+\end{itemize}
+
+Даже в тех случаях, когда мы явно работаем в <<жадном>> режиме, на самом деле используется режим отложенных вычислений
+\begin{lstlisting}[
+style = ironpython,
+numbers = none
+]
+df.groupby("foo").agg([pl.col("bar").sum()])
+# на самом деле
+(df.lazy().groupby("foo").agg([pl.col("bar").sum()])).collect()
+\end{lstlisting}
+
+Добавить столбец (или несколько столбцов) можно так
+\begin{lstlisting}[
+style = ironpython,
+numbers = none
+]
+df.with_columns([
+    (pl.col("sepal_length").sum() + pl.col("petal_width")).alias("new_col_1"),
+    pl.col("sepal_length").mean().alias("new_col_2")
+])
+\end{lstlisting}
+
+Создать производный столбец с кастомной функцией можно так
+\begin{lstlisting}[
+style = ironpython,
+numbers = none
+]
+df.with_columns([
+    pl.col("Speed").map(f=lambda elem: elem ** 2).alias("SquaredSpeed")
+])
+\end{lstlisting}
+
+Если псевдоним не задать, то метод \verb*|with_columns| перезапишет существующий столбец \texttt{"Speed"}. Но \verb*|with_columns| возвращает новый объект.
+
+\remark{
+\color{red}
+Пользовательские Python-функции убивают распараллеливание!
+}
+
+Можно также фильтровать группы. Пусть требуется вычислить среднее по группе, но не для всех элементов группы. Для ясности можно использовать Python-функции. Они ничего не стоят, потому как применяются только в Polars-выражении, а на шаге выполнения запроса
+\begin{lstlisting}[
+style = ironpython,
+numbers = none	
+]
+from datetime import date
+
+import polars as pl
+
+from .dataset import dataset
+
+
+def compute_age() -> pl.Expr:
+	return date(2021, 1, 1).year - pl.col("birthday").dt.year()
+
+
+# здесь мы вычисляем временную дельту для столбца 'birthday',
+# а фильтруем по ассоциированным строкам столбца 'gender'
+def avg_birthday(gender: str) -> pl.Expr:
+	return compute_age().filter(pl.col("gender") == gender).mean().alias(f"avg {gender} birthday")
+
+
+q = (
+	dataset.lazy()
+	.groupby(["state"])
+	.agg(
+		[
+			avg_birthday("M"),
+			avg_birthday("F"),
+			(pl.col("gender") == "M").sum().alias("# male"),
+			(pl.col("gender") == "F").sum().alias("# female"),
+		]
+	)
+	.limit(5)
+)
+
+df = q.collect()
+\end{lstlisting}
+
+С помощью метода \texttt{filter} мы отбираем строки в столбце \texttt{'gender'}, а затем по оставшимся строкам столбца \texttt{'gender'} вычисляем среднее и связываем результат с псевдонимом.
+
+Еще вместо группировки можно использовать фильтр по одному столбцу и агрегацию по другому столбцу
+\begin{lstlisting}[
+style = ironpython,
+numbers = none	
+]
+df.select([
+    pl.col("sepal_width").filter(pl.col("species") == "setosa").mean()
+])  # 3.418
+\end{lstlisting}
+
+На Pandas было бы так
+\begin{lstlisting}[
+style = ironpython,
+numbers = none	
+]
+df.loc[df.loc[:, "species"] == "setosa", "sepal_width"].mean()
+\end{lstlisting}
+
+\subsection{Оконные функции}
+
+Оконную функцию из обычной можно сделать, вызвав метод $ \verb*|.over()| $.
+
+Пример
+\begin{lstlisting}[
+style = ironpython,
+numbers = none	
+]
+df.select(["Type 1", "Type 2", "Attack", "Defense"]).select([
+	"Type 1",
+	"Type 2",
+	pl.col("Attack").mean().over("Type 1").alias("avg_attack_by_type"),
+	pl.col("Defense").mean().over(["Type 1", "Type 2"]).alias("avg_defense_by_type_comb"),
+])
+\end{lstlisting}
+
+Добавить столбец \texttt{"WinCumsum"} с кумулятивной суммой по группе
+\begin{lstlisting}[
+style = ironpython,
+numbers = none	
+]
+df.select([
+    "Type 1",
+    "Speed",
+    pl.col("Speed").cumsum().over("Type 1").alias("WinCumsum"),
+]).sort("Type 1")
+\end{lstlisting}
+
+Еще пример оконной функции. NB: столбцы, которые используются в \verb*|.over([...])| должны быть отсортированы
+\begin{lstlisting}[
+style = ironpython,
+numbers = none	
+]
+df.sort("Type 1").select([
+    pl.col("Type 1").head(3).list().over("Type 1").flatten(),
+    pl.col("Name").sort_by("Attack").head(3).list().over("Type 1").flatten().alias("fastest/group"),
+    pl.col("Name").sort_by(pl.col("Speed")).head(3).list().over("Type 1").flatten().alias("strongest/group"),
+])
+\end{lstlisting}
+
+\subsection{Универсальные NumPy-функции}
+
+Polars поддерживает универсальные numpy-функции \verb*|ufuncs| \url{https://numpy.org/doc/stable/reference/ufuncs.html#available-ufuncs}.
+
+Пример
+\begin{lstlisting}[
+style = ironpython,
+numbers = none
+]
+df.select([
+    np.log(pl.all()).suffix("_log")  # pl.all() -- применяется ко всем столбцам
+])
+\end{lstlisting}
+
+\subsection{Примеры}
+
+Столбцы можно выбирать по регулярному выражению
+\begin{lstlisting}[
+style = ironpython,
+numbers = none
+]
+df.select([
+    pl.col(r"^Type\s{1}\d{1}$")  # Polars-выражение
+])
+
+# или так
+df.select(r"^Type\s{1}\d{1}$")
+
+df.select([
+    pl.col(r"^Sp.*$").sum()
+])
+\end{lstlisting}
+
+С помощью конструкции \texttt{pl.all()} можно выбирать все столбцы в таблице (работает также как \verb*|*| в SQL-запросах)
+\begin{lstlisting}[
+style = ironpython,
+numbers = none
+]
+df.select([
+    pl.all().reverse().suffix("_rev")  # выбрать все столбцы в обратном порядке
+])
+
+df.select([
+    pl.all().sum().suffix("_sum")  # найти сумму по всем столбцам
+])
+\end{lstlisting}
+
+Polars-выражения можно связывать с переменными
+\begin{lstlisting}[
+style = ironpython,
+numbers = none
+]
+mask = pl.col("Type 1").str.contains(r"^Gr.*$")
+
+df.select([
+    mask.sum(),  # найти количество элементов, удовлетворяющих шаблону
+])
+
+df.select([
+    pl.col("Speed").filter(mask).sum(),
+])
+\end{lstlisting}
+
+Пример с when-then-otherwise
+\begin{lstlisting}[
+style = ironpython,
+numbers = none	
+]
+df.select([
+    "Type 1",
+    pl.when(pl.col("Type 1") == "Grass")
+    .then(pl.col("Type 2").str.to_uppercase())
+    .otherwise(pl.col("Name").str.to_lowercase())
+])
+\end{lstlisting}
+
+Пример с оконными функциями
+\begin{lstlisting}[
+style = ironpython,
+numbers = none
+]
+df.select([
+    "fruits",
+    "cars",
+    "B",
+    pl.col("B").sum().over("fruits").alias("B_sum_by_fruits"),
+    pl.col("B").sum().over("cars").alias("B_sum_by_cars"),
+])
+\end{lstlisting}
+
+Сумма вычисляется по группе и транслируется на все элементы группы.
+
+Приклеить столбец справа можно с помощью метода \texttt{hstack}
+\begin{lstlisting}[
+style = ironpython,
+numbers = none
+]
+df: pl.DataFrame
+df.hstack([
+    pl.Series("new_col", np.random.randint(10, 100, size=df.height))
+])
+\end{lstlisting}
+
+Вставить столбец в произвольную позицию можно так
+\begin{lstlisting}[
+style = ironpython,
+numbers = none
+]
+# insert_at_idx изменяет объект на месте
+df.insert_at_idx(0, pl.Series("new_col", np.random.randn(df.heigth)))
+\end{lstlisting}
+
+\subsection{Работа с временными рядами}
+
+Pandas-конструкцию \verb*|ts.resample(...).agg(...)| силами Polars можно реализовать так
+\begin{lstlisting}[
+style = ironpython,
+numbers = none
+]
+ts.groupby_dynamic(
+    "time_stamp",
+    every="4h",
+    closed="left",
+).agg([
+    pl.col("value").count().alias("value_cnt"),
+    pl.col("value").mean().suffix("_mean"),
+])
+\end{lstlisting}
 
 
 \section{Приемы работы с библиотекой Catboost}
@@ -2283,6 +2774,82 @@ policy = GNNPolicy().to(DEVICE)
 	\includegraphics[scale=0.5]{figures/backprop.png}
 	\caption{ Прямое распространение сигнала и обратное распространение градиента }\label{fig:backprop}
 \end{figure}
+
+\section{Приемы работы с библиотекой \texttt{marshmallow}}
+
+\emph{Сериализация} ({dumping}) -- это процедура преобразования объекта или дерева объектов в какой-либо формат, по которому потом эти объекты можно восстановить. Используется, например, для сохранения состояния программы (то есть некоторых ее объектов) между запусками. Или для передачи данных по сети. 
+
+Основная идея заключается в том, что сериализованный формат -- это \emph{последовательность байт} или \emph{строка}.
+
+Обратная процедура называется \emph{десериализацией} (loading).
+
+Например, для сериализации с помощью модуля \texttt{json} можно поступить так
+\begin{lstlisting}[
+style = ironpython,
+numbers = none
+]
+import json
+
+d = {"key1": 10, "key2": 20}
+
+# для преобрзвания дерева объектов в последовательность байтов
+with open("./make_json.json", mode="w") as f:
+    json.dump(d, fp=f) # словарь -> файл
+
+# для преобразования дерева объектов в строку
+json.dumps(d)  # вернет строку '{"key1": 10, "key2": 20}'
+\end{lstlisting}
+
+Объявим класс данных
+\begin{lstlisting}[
+style = ironpython,
+numbers = none
+]
+from marshmallow import Schema, fields, validate, ValidationError
+
+# объявляем структуру данных
+class PersonSchema(Schema):
+    name = fields.String(
+        required=True,
+        validate=validate.Regexp("^Le.*$")
+    )
+    age = fields.Integer(
+        required=True,
+        validate=validate.Range(min=18, max=45)
+    )
+    job = fields.String(
+        required=False,
+        validate=validate.Length(min=3)
+    )
+    email = fields.Email(required=False)
+    sex = fields.String(load_default="male")  # это значение по умолчанию будет использоваться на шаге десериализации
+
+# проверка на согласованность 
+person_leor = PersonSchema().load({
+    "name": "Leor",
+    "age": 35,
+    "job": "Data Scientist",
+    "email": "leor.finkelberg@yandex.ru",
+})
+
+type(person_leor)  # dict
+\end{lstlisting}
+
+Если переданный словарь отвечает стуктуре данных, то метод \verb*|load()| класса \verb*|PersonSchema| этот же словарь и вернет. Но если хотя бы одно значение нарушает требования поля, то будет возбуждено исключение \verb*|ValidationError|. Поэтому строки вызова метода \verb*|load| следует оборачивать с помощью \verb*|try-except|
+\begin{lstlisting}[
+style = ironpython,
+numbers = none	
+]
+schema = PersonSchema()
+leor = {"name": "Leor", ...}
+try:
+    # метод load прогоняет словарь через структуру данных
+    # и если все хорошо, то этот же словарь и возвращает
+    person_leor: dict = PersonSchema().load(leor)
+except ValidationError as err:
+    print(err.messages, err.valid_data)
+\end{lstlisting}
+
 
 \section{Борьба с переобучением в нейронных сетях}
 
