@@ -749,6 +749,105 @@ SVM можно адаптировать для работы с наборами 
 Если вентиль $ \Gamma_{l,u}^t $ близок к 0, тогда ячейка памяти сохраняет значение, полученное на предыдущем временном шаге $ h_l^{t-1} $. Если вентиль $ \Gamma_{l,u}^t $ близок к 1, значение ячейки памяти затирается новым значением $ \tilde{h}^t_{l,u} $.
 
 
+\section{Приемы работы с библиотекой plotly}
+
+Шаблонный код для JupyterLab
+\begin{lstlisting}[
+style = ironpython,
+numbers = none
+]
+# ячейка
+import numpy as np
+import plotly.graph_objs as go
+from plotly.offline import (
+	download_plotlyjs,
+	init_notebook_mode,
+	plot,
+	iplot,
+)
+# ячейка
+init_notebook_mode(connected=True)
+# ячейка
+fig = go.Figure()
+# ячейка
+fig.add_traces([
+	go.Scatter(y=np.random.randn(100).cumsum(), name="curve-1"),
+	go.Scatter(y=np.random.randn(100).cumsum(), name="curve-2"),
+]);
+# ячейка
+fig.update_layout(
+	title=dict(
+		text=(
+			"<i>Реализации значений переменных</i>"),       
+		font=dict(
+			family="Arial",
+			size=18,
+			color="#07689F",
+		),
+	),
+	xaxis_title="<i>Имена переменных</i>",
+	yaxis_title="<i>Значение переменной</i>",
+	xaxis=dict(
+		showline=True,
+		showgrid=False,
+		showticklabels=True,
+		linecolor="rgb(204, 204, 204)",
+		linewidth=1.5,
+		ticks="outside",
+		tickfont=dict(
+			family="Arial",
+			size=15,
+			color="rgb(82, 82, 82)",
+		),
+	),
+	yaxis=dict(
+		showgrid=False,
+		zeroline=False,
+		showline=True,
+		showticklabels=True,
+		linecolor="rgb(204, 204, 204)",
+		linewidth=1.5,
+		ticks="outside",
+		tickfont=dict(
+			family="Arial",
+			size=15,
+			color="rgb(82, 82, 82)",
+		),
+	),
+	autosize=False,
+	margin=dict(
+		autoexpand=False,
+		l=70,
+		r=10,
+		t=50,
+	),
+	showlegend=True,
+	plot_bgcolor="white",
+	legend_title_text="<i>Имя блока легенды</i>",
+	legend=dict(
+		orientation="v",
+		yanchor="bottom",
+		y=0.01,
+		xanchor="right",
+		x=0.99,
+		font=dict(family="Arial", size=12, color="black"),
+	),
+	font=dict(
+		family="Arial",
+		size=13,
+	),
+)
+\end{lstlisting}
+
+Если теперь воспользоваться функцией \texttt{plot}, то в текущей директории проекта будет создан \texttt{html}-файл интерактивного графика, который автоматически откроется в браузере
+\begin{lstlisting}[
+style = ironpython,
+numbers = none
+]
+plot(fig, filename="test-sample.html")
+\end{lstlisting}
+
+
 \section{Приемы работы с библиотекой анализа временных рядов ETNA}
 
 \subsection{Перекрестная проверка на временных рядах}
