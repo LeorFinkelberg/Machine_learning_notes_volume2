@@ -27,6 +27,8 @@
 
 \section{XGBoost}
 
+Awesome XGBoost \url{https://github.com/dmlc/xgboost/tree/master/demo}
+
 \subsection{Установка}
 
 Установить библиотеку можно с помощью менеджера пакетов \verb|pip|
@@ -466,7 +468,374 @@ xgb.cv(
 	\end{itemize}
 \end{itemize}
 
+\subsection{Python Package}
 
+\subsubsection{Интерфейс данных}
+
+XGBoost поддерживает numpy-массивы, pandas-кадры, XGBoost binary buffer file, LIBSVM etc.
+
+Создать матрицу данных на базе numpy-матрицы
+\begin{lstlisting}[
+style = ironpython,
+numbers = none
+]
+data = np.random.rand(5, 10)
+label = np.random.randint(2, size=5)
+dtrain = xgb.DMatrix(data, label=label)
+\end{lstlisting}
+
+Создать матрицу данных на базе pandas-кадра 
+\begin{lstlisting}[
+style = ironpython,
+numbers = none
+]
+data = pd.DataFrame(np.arange(12).reshape((4, 3)), columns=list("abc"))
+label = pd.Series(np.random.randint(2, size=4))
+dtrain = xgb.DMatrix(data, label=label)
+\end{lstlisting}
+
+Сохранение матрицы данных в бинарный файл для ускорения загрузки
+\begin{lstlisting}[
+style = ironpython,
+numbers = none
+]
+dtrain = xgb.DMatrix("train.svm.txt")
+dtrain.save_binary("train.buffer")
+\end{lstlisting}
+
+Можно передать веса
+\begin{lstlisting}[
+style = ironpython,
+numbers = none
+]
+w = np.random.rand(5, 1)
+dtrain = xgb.DMatrix(data, label=label, missing=np.nan, weight=w)
+\end{lstlisting}
+
+При построении матрицы данных на базе csv-файла с помощью \verb|label_column| можно указать какой столбец считать целевой переменной
+\begin{lstlisting}[
+style = ironpython,
+numbers = none
+]
+# 5-ый столбец будет целевой переменной
+dtrain = xgb.DMatrix("train.csv?format=csv&label_column=5")
+\end{lstlisting}
+
+ВАЖНО: парсер XGBoost имеет ограниченную функциональность, поэтому рекомендуется использовать pandas-интерфейс -- \verb|read_csv|.
+
+Обучение модели 
+\begin{lstlisting}[
+style = ironpython,
+numbers = none
+]
+bst = xgb.train(
+    params={"max_depth": 2, "eta": 1, "objecitve": "binary:logistic"},
+    dtrain=dtrain,
+    num_boost_round=10,
+    evals=[(dtrain, "train"), (dtest, "test")]
+)
+\end{lstlisting}
+
+После обучения модель можно сохранить 
+\begin{lstlisting}[
+style = ironpython,
+numbers = none
+]
+bst.save_model("0001.model")
+
+bst_restore = xgb.Booster()
+bst_restore.load_model("0001.model")
+\end{lstlisting}
+
+\subsubsection{Ранняя остановка}
+
+Если есть валидационный набор данных, то оптимальное число итераций градиентного бустинга можно подборать с помощью ранней остановки. Ранняя остановка требует хотя бы одного набора данных в \verb|eval|
+\begin{lstlisting}[
+style = ironpython,
+numbers = none
+]
+bst = xgb.train(.., evals=evals, early_stopping_rounds=10)
+\end{lstlisting}
+
+Модель будет обучаться до тех пор пока метрика качества на валидационном наборе данных не перестанет улучшаться. Ошибка на валидационном наборе должна уменьшаться как минимум каждые \verb|early_stopping_rounds| для того чтобы процедура обучения продолжалась.
+
+Когда ранняя остановка завершиться, у модели появится два дополнительных поля: \verb|bst.best_score| и \verb|bst.best_iteration|.
+
+ВАЖНО: \verb|xgb.train()| возвращает модель последней итерации, а не лучшей!
+
+\subsubsection{Прогноз}
+
+Прогноз можно построить так
+\begin{lstlisting}[
+style = ironpython,
+numbers = none
+]
+ypred = bst.predict(dtest)
+\end{lstlisting}
+
+Если число итераций градиентного бустинга подбиралось с помощью ранней остановки, то прогноз можно построить для нескольких итераций градиентного бустинга
+\begin{lstlisting}[
+style = ironpython,
+numbers = none
+]
+ypred = bst.predict(dtest, iteration_range(0, bst.best_iteration + 1))
+\end{lstlisting}
+
+\subsubsection{Scikit-learn интерфйес}
+
+Можно использовать scikit-learn интерфейс
+\begin{lstlisting}[
+style = ironpython,
+numbers = none
+]
+reg = xgb.XGBRegressor(tree_method="gpu_hist")
+reg.fit(X, y)
+reg.save_model("regressor.json")
+\end{lstlisting}
+
+При необходимости можно преобразовать модель в бустер (booster). Бустер это модель XGBoost, которая содержит низкоуровневые процедуры для обучения, предсказания и вычисления
+\begin{lstlisting}[
+style = ironpython,
+numbers = none
+]
+booster: xgb.Booster = reg.get_booster()
+\end{lstlisting}
+
+\subsubsection{Core Data Structure}
+
+\verb|xgboost.DMatrix|: это внутренняя структура данных XGBoost, оптимизированная и по памяти, и по скорости обучения.
+
+\verb|xgboost.QuantileDMatrix|: это вариант \verb|DMatrix|, который строит квантилизованные наборы для \verb|hist| и \verb|gpu_hist| методов. Этот класс был разработан специально для снижения потребления памяти в ходе обучения. Нельзя использовать квантильную матрицу данных \verb|QuantileDMatrix| в качестве валидационного / тестового набора данных \emph{без} привязки (параметр \verb|ref|) к обучающему набору данных \verb|QuantileDMatrix|, так как в ходе квантенизации может быть потеряна часть информации.
+
+Метод бустера \verb|get_score(fmap="", importance_type="weight")| можно вычислить важность признаков. Для деревянных моделей важность определяется как
+\begin{itemize}
+	\item \verb|"weight"|: количество раз, когда признак использовался в разбиениях по всем деревьям,
+	
+	\item \verb|"gain"|: средний информационный прирост по всем разбиениям, в которых принимал участие рассматриваемый признак,
+	
+	\item \verb|"cover"|: среднее покрытие по всем разбиениям, в которых признак принимал участие,
+	
+	\item \verb|"total_gain"|: общий информационный прирост по всем разбиениям, в которых признак принимал участие,
+	
+	\item \verb|"total_cover"|: общее покрытые по всем разбиениям, в которых признак принимал участие.
+\end{itemize} 
+
+Метод бустера \verb|inplace_predict| строит прогноз <<на месте>>. В отличие от метода \verb|predict|, предсказание на месте не кеширует результат прогноза.
+
+В методе \verb|predict| можно указать флаг \verb|pred_contribs=True|, и тогда вернется матрица размера $ n_{samples} \times (n_{feats} + 1) $, в которой каждая строка означает \emph{вклад признаков} (значения SHAP) в соответсвующий прогноз. Последний столбец это смещение.
+
+Флаг \verb|iteration_range| метода \verb|predict| определяет какой уровень деревьев используется для прогноза.
+
+Метод бустера \verb|trees_to_dataframe()| парсит модель и возвращает в виде pandas-структуры
+\begin{lstlisting}[
+style = bash,
+numbers = none
+]
+    Tree  Node    ID Feature  Split   Yes    No Missing      Gain  Cover  Category
+0      0     0   0-0      f1   2.95   0-1   0-2     0-1  6.663281  112.0       NaN
+1      0     1   0-1      f3   1.65   0-3   0-4     0-3  7.100669   44.0       NaN
+2      0     2   0-2      f2   3.05   0-5   0-6     0-5  1.103385   68.0       NaN
+3      0     3   0-3      f0   4.70   0-7   0-8     0-7  1.525521   31.0       NaN
+4      0     4   0-4    Leaf    NaN   NaN   NaN     NaN -0.139286   13.0       NaN
+5      0     5   0-5    Leaf    NaN   NaN   NaN     NaN -0.145833   35.0       NaN
+6      0     6   0-6      f2   5.00   0-9  0-10     0-9  4.627291   33.0       NaN
+7      0     7   0-7    Leaf    NaN   NaN   NaN     NaN -0.100000    2.0       NaN
+8      0     8   0-8      f2   5.25  0-11  0-12    0-11  0.808621   29.0       NaN
+9      0     9   0-9      f3   1.70  0-13  0-14    0-13  0.819444   11.0       NaN
+...
+\end{lstlisting}
+
+\subsubsection{Learning API}
+
+\verb|xgboost.train()|: обучает бустер с заданными параметрами:
+\begin{itemize}
+	\item \verb|params|: параметры бустера.
+	
+	\item \verb|dtrain|: обучающий набор данных.
+	
+	\item \verb|num_boost_round|: число итераций градиентного бустинга.
+	
+	\item \verb|evals|: коллекция валидационных наборов данных, на которых будут вычисляться указанные метрики в ходе обучения. Валидационные метрики помогают отслеживать производительность модели.
+	
+	\item \verb|obj|: пользовательская целевая функция.
+	
+	\item \verb|early_stopping_rounds|: активирует раннюю остановку. Валидационные метрики должны улучшаться по крайней мере каждые \verb|early_stopping_rounds| раундов, чтобы обучение продолжалось. 
+\end{itemize}
+
+\verb|xgboost.cv()|: перекрестная проверка с заданными параметрами:
+\begin{itemize}
+	\item \verb|params|: параметры бустера.
+	
+	\item \verb|dtrain|: обучающий набор данных.
+	
+	\item \verb|num_boost_round|: число итераций градиентного бустинга.
+	
+	\item \verb|nfold|: число фолдов перекрестной проверки.
+	
+	\item \verb|stratified|: стратифицированное разбиение.
+	
+	\item \verb|metrics|: метрика, которая будет вычисляться на перекрестной проверке.
+	
+	\item \verb|obj|: пользовательская целевая функция.
+	
+	\item \verb|early_stopping_rounds|: активирует раннюю остановку. Валидационные метрики должны улучшаться по крайней мере каждые \verb|early_stopping_rounds| раундов, чтобы обучение продолжалось. 
+	
+	\item \verb|fpreproc|: функция предобработки, которая принимает (dtrain, dtest, param) и возвращает их новое представление.
+	
+	\item \verb|suffle|: перетасовывает данные перед разбиением на фолды.
+\end{itemize}
+
+\subsubsection{Scikit-Learn API}
+
+См. \url{https://xgboost.readthedocs.io/en/stable/python/python_api.html}
+
+\begin{lstlisting}[
+style = ironpython,
+numbers = none
+]
+from sklearn.metrics import mean_absolute_error
+
+reg = xgb.XGBRegressor(
+    tree_method="hist",
+    eval_metric=mean_absolute_error,
+)
+reg.fit(X, y, eval_set=[(X, y)])
+\end{lstlisting}
+
+\subsubsection{Callback API}
+
+\subsection{Подбор гиперпараметров}
+
+Можно использовать Scikit-learn интерфейс
+\begin{lstlisting}[
+style = ironpython,
+numbers  = none
+]
+xgb_model = xgb.XGBRegressor(n_jobs=1)
+
+clf = GridSearchCV(
+  # <- NB: используется модель градиентного бустинга XGBoostr (но интерфейс scikit-learn)
+  xgb_model,
+  {
+      "max_depth": [2, 4],
+      "n_estimators": [50, 100],
+   },
+   verbose=1,
+   n_jobs=1,
+   cv=3,
+)
+
+clf.fit(X, y)
+clf.best_score_
+clf.best_params_
+
+# Можно сохранить обученную модель
+pickle.dump(clf, open("best_calif.pkl", "wb"))
+clf2 = pickle.load(open("best_calif.pkl", "rb"))
+
+clf2.predict(X)
+\end{lstlisting}
+
+Можно организовать раннюю остановку
+\begin{lstlisting}[
+style = ironpython,
+numbers = none
+]
+X = digits["data"]
+y = digits["target"]
+
+X_train, X_test, y_train, y_test = train_test_split(X, y, random_state=0)
+clf = xgb.XGBClassifier(n_jobs=1)
+clf.fit(
+  X_train, y_train,
+  early_stopping_rounds=10,
+  eval_metric="auc",
+  eval_set=[(X_test, y_test)]
+)
+\end{lstlisting}
+
+Для более сложных случаев подбора гиперпараметров следует воспользоваться библиотекой Optuna \url{https://optuna.readthedocs.io/en/stable/index.html}.
+
+Пример использования связки XGBoost + Optuna
+\begin{lstlisting}[
+style = ironpython,
+numbers = none
+]
+from sklearn.model_selection import ShuffleSplit
+import pandas as pd
+import numpy as np
+import xgboost as xgb
+import optuna
+
+# The Veterans' Administration Lung Cancer Trial
+# The Statistical Analysis of Failure Time Data by Kalbfleisch J. and Prentice R (1980)
+df = pd.read_csv('../data/veterans_lung_cancer.csv')
+print('Training data:')
+print(df)
+
+# Split features and labels
+y_lower_bound = df['Survival_label_lower_bound']
+y_upper_bound = df['Survival_label_upper_bound']
+X = df.drop(['Survival_label_lower_bound', 'Survival_label_upper_bound'], axis=1)
+
+# Split data into training and validation sets
+rs = ShuffleSplit(n_splits=2, test_size=.7, random_state=0)
+train_index, valid_index = next(rs.split(X))
+dtrain = xgb.DMatrix(X.values[train_index, :])
+dtrain.set_float_info('label_lower_bound', y_lower_bound[train_index])
+dtrain.set_float_info('label_upper_bound', y_upper_bound[train_index])
+dvalid = xgb.DMatrix(X.values[valid_index, :])
+dvalid.set_float_info('label_lower_bound', y_lower_bound[valid_index])
+dvalid.set_float_info('label_upper_bound', y_upper_bound[valid_index])
+
+# Define hyperparameter search space
+base_params = {'verbosity': 0,
+	'objective': 'survival:aft',
+	'eval_metric': 'aft-nloglik',
+	'tree_method': 'hist'}  # Hyperparameters common to all trials
+def objective(trial):
+	params = {'learning_rate': trial.suggest_loguniform('learning_rate', 0.01, 1.0),
+		'aft_loss_distribution': trial.suggest_categorical('aft_loss_distribution',
+		['normal', 'logistic', 'extreme']),
+		'aft_loss_distribution_scale': trial.suggest_loguniform('aft_loss_distribution_scale', 0.1, 10.0),
+		'max_depth': trial.suggest_int('max_depth', 3, 8),
+		'lambda': trial.suggest_loguniform('lambda', 1e-8, 1.0),
+		'alpha': trial.suggest_loguniform('alpha', 1e-8, 1.0)}  # Search space
+	params.update(base_params)
+	pruning_callback = optuna.integration.XGBoostPruningCallback(trial, 'valid-aft-nloglik')
+	bst = xgb.train(params, dtrain, num_boost_round=10000,
+		evals=[(dtrain, 'train'), (dvalid, 'valid')],
+		early_stopping_rounds=50, verbose_eval=False, callbacks=[pruning_callback])
+	if bst.best_iteration >= 25:
+		return bst.best_score
+	else:
+		return np.inf  # Reject models with < 25 trees
+
+# Run hyperparameter search
+study = optuna.create_study(direction='minimize')
+study.optimize(objective, n_trials=200)
+print('Completed hyperparameter tuning with best aft-nloglik = {}.'.format(study.best_trial.value))
+params = {}
+params.update(base_params)
+params.update(study.best_trial.params)
+
+# Re-run training with the best hyperparameter combination
+print('Re-running the best trial... params = {}'.format(params))
+bst = xgb.train(params, dtrain, num_boost_round=10000,
+	evals=[(dtrain, 'train'), (dvalid, 'valid')],
+	early_stopping_rounds=50)
+
+# Run prediction on the validation set
+df = pd.DataFrame({'Label (lower bound)': y_lower_bound[valid_index],
+	'Label (upper bound)': y_upper_bound[valid_index],
+	'Predicted label': bst.predict(dvalid)})
+print(df)
+# Show only data points with right-censored labels
+print(df[np.isinf(df['Label (upper bound)'])])
+
+# Save trained model
+bst.save_model('aft_best_model.json')
+\end{lstlisting}
 
 
 
