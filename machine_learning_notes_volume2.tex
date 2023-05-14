@@ -702,8 +702,6 @@ reg = xgb.XGBRegressor(
 reg.fit(X, y, eval_set=[(X, y)])
 \end{lstlisting}
 
-\subsubsection{Callback API}
-
 \subsection{Подбор гиперпараметров}
 
 Можно использовать Scikit-learn интерфейс
@@ -842,6 +840,576 @@ bst.save_model('aft_best_model.json')
 \section{LightGBM}
 
 \section{CatBoost}
+
+\section{Приемы работы с AutoML-библиотекой FLAML}
+
+FLAML \url{https://github.com/microsoft/FLAML} -- это легковесная библиотека эффективной автоматизации процессов машинного обучения, включая выбор модели, подбор гиперпараметров и пр.
+
+\subsection{Установка}
+
+Установить можно с помощью менеджера пакетов \verb|pip| как
+\begin{lstlisting}[
+style = ironpython,
+numbers = none
+]
+pip install flaml
+\end{lstlisting}
+
+\subsection{Быстрый старт}
+
+Простейший пример использования
+\begin{lstlisting}[
+style = ironpython,
+numbers = none
+]
+from flaml import AutoML
+
+automl = AutoML()
+automl.fit(X_train, y_trian, task="regression")
+automl.best_config_per_estimator
+automl.best_estimator  # rf
+reg = automl.model  # <flaml.automl.model.RandomForestEstimator at 0x7f8f5b056cd0>
+reg.get_params()
+reg.predict(X_test)
+\end{lstlisting}
+
+Можно сохранить лучшую конфигурацию
+\begin{lstlisting}[
+style = bash,
+numbers = none
+]
+import json
+
+automl.save_best_config("rf_best_config.json")
+
+with open("./rf_best_config.json") as f:
+    config: dict = json.load(f)
+
+# В scikit-learn параметр max_leaves называется max_leaf_nodes 
+# и у параметра criterion нет значения 'entropy'
+config["hyperparameters"]["max_leaf_nodes"] = config["hyperparameters"].pop("max_leaves")
+config["hyperparameters"].update({"criterion": "friedman_mse"})
+
+reg = RandomForestRegressor(**config)
+reg.predict(X_test)
+\end{lstlisting}
+
+Можно сохранить обученную модель в формате pickle
+\begin{lstlisting}[
+style = ironpython,
+numbers = none
+]
+import joblib
+...
+with open("./rf_automl.pkl", "wb") as f:
+    joblib.dump(reg, f)
+    
+with open("./rf_automl.pkl", "rb") as f:
+    reg = joblib.load(f)
+    
+reg.predict(X_test)
+\end{lstlisting}
+
+\subsection{Основные параметры}
+
+Поддерживаются следующие типы задач:
+\begin{itemize}
+	\item \verb|"classification"|: классификация на табличных данных,
+	
+	\item \verb|"regression"|: регрессия на табличных данных,
+	
+	\item \verb|"ts_forecast"|: прогнозирование на горизонт временного ряда,
+	
+	\item \verb|"ts_forecast_classification"|: классификация временных рядов,
+	
+	\item \verb|"ts_forecast_panel"|: прогнозирование на пакете временных рядов (multiple time series),
+	
+	\item и пр.
+\end{itemize}
+
+Поддерживаются следующие ошибки (или метрики качества, приведенные к ошибке)
+\begin{itemize}
+	\item \verb|"log_loss"|: метрика по умолчанию для мультиклассовой классификации,
+	
+	\item \verb|"r2"|: $ 1 - R^2 $ -- определяется как метрика для минимизации; по умолчанию используется в задачах регрессии,
+	
+	\item \verb|rmse|: RMSE,
+	
+	\item \verb|mse|: MSE,
+	
+	\item \verb|mae|: MAE,
+	
+	\item \verb|mape|: MAPE,
+	
+	\item \verb|roc_auc|: $ 1 - ROC\_AUC $; по умолчанию используется в задачах бинарной классификации,
+	
+	\item \verb|roc_auc_ovr|: $ 1 - ROC\_AUC $ с \verb|multi_class="ovr"|,
+	
+	\item \verb|roc_auc_ovo|: $ 1 - ROC\_AUC $ с \verb|multi_class="ovo"|,
+	
+	\item \verb|roc_auc_weighted|: $ 1 - ROC\_AUC $ с \verb|average="weighted"|,
+	
+	\item \verb|roc_auc_ovr_weighted|: $ 1 - ROC\_AUC $ с \verb|multi_class="ovr"| и \verb|average="weighted"|,
+	
+	\item \verb|roc_auc_ovo_weighted|: $ 1 - ROC\_AUC $ с \verb|mutlti_class="ovo"| и \verb|average="weighted"|,
+	
+	\item \verb|f1|: $ 1 - F_1 $,
+	
+	\item \verb|micro_f1|: $ 1 - F_1 $ с \verb|average="micro"|,
+	
+	\item \verb|macro_f1|: $ 1 - F_1 $ с \verb|average="macro"|,
+	
+	\item и пр.
+\end{itemize}
+
+Поддерживаются следующие модели:
+\begin{itemize}
+	\item \verb|lgbm|: LGBEstimator для задач классификации, регрессии, ранжирования, прогнозирования на горизонт, классификации временных рядов. Гиперпараметры:
+	\begin{itemize}
+		\item \verb|n_estimators|,
+		\item \verb|num_leaves|,
+		\item \verb|min_child_samples|,
+		\item \verb|learning_rate|,
+		\item \verb|log_max_bin|,
+		\item \verb|colsample_bytree|,
+		\item \verb|reg_alpha|,
+		\item \verb|reg_lambda|.
+	\end{itemize}
+
+	\item \verb|xgboost|: XGBoostSklearnEstimator для задач классификации, регрессии, ранжирования, прогнозирования на горизонт, классификации временных рядов. Гиперпараметры:
+    \begin{itemize}
+		\item \verb|n_estimators|,
+		\item \verb|num_leaves|,
+		\item \verb|min_child_weight|,
+		\item \verb|learning_rate|,
+		\item \verb|log_max_bin|,
+		\item \verb|colsample_bytree|,
+		\item \verb|reg_alpha|,
+		\item \verb|reg_lambda|.
+    \end{itemize}
+
+    \item \verb|rf|: RandomForestEstimator для задач классификации, регрессии, прогнозирования на горизонт, классификации временных рядов. Гиперпараметры:
+    \begin{itemize}
+    	\item \verb|n_estimators|,
+    	
+    	\item \verb|max_features|,
+    	
+    	\item \verb|max_leaves|,
+    	
+    	\item \verb|criterion| (только для классификации)
+    \end{itemize}
+
+    \item \verb|arima|: ARIMA для задачи \verb|"ts_forecast"|. Гиперпараметры: \verb|p|, \verb|d|, \verb|q|,
+    
+    \item \verb|sarimax|: SARIMAX для задачи \verb|"ts_forecast"|. Гиперпараметры: \verb|p|, \verb|d|, \verb|q|, \verb|P|, \verb|D|, \verb|Q|, \verb|s|.
+    
+    \item \verb|holt-winters|: модель Хольта-Винтерса (модель тройного экспоненциального сглаживания) для задачи \verb|"ts_forecast"|, Гиперпараметры:
+    \begin{itemize}
+    	\item \verb|seasonal_periods|,
+    	
+    	\item \verb|seasonal|,
+    	
+    	\item \verb|use_boxcox|,
+    	
+    	\item \verb|trend|,
+    	
+    	\item \verb|damped_trend|.
+    \end{itemize}
+
+    \item \verb|temporal_fusion_transformer|: TemporalFusionTransformerEstimators для задачи  \verb|"ts_forecast"|. Гиперпараметры:
+    \begin{itemize}
+    	\item \verb|gradient_clip_val|,
+    	
+    	\item \verb|hidden_size|,
+    	
+    	\item \verb|hidden_continuous_size|,
+    	
+    	\item \verb|attention_head_size|,
+    	
+    	\item \verb|dropout|,
+    	
+    	\item \verb|learning_rate|.
+    \end{itemize}
+\end{itemize}
+
+\subsection{Кастомизация пространства поиска}
+
+Чтобы костамизировать пространство поиска для встроенных моделей, нужно переопределить метод \verb|search_space|. Причем ключи-гиперпараметры должны включать: \verb|domain| для описания области поиска и опционально \verb|init_value| (просто значение по умолчанию гиперпараметра) и/или \verb|low_cost_init_value|, которое задает самое дешевое в вычислительном плане значение гиперпараметра
+
+ВАЖНО: если диапазон изменения параметра большой, то рекомендуется выполнять выборку в \emph{логарифмической} шкале
+\begin{lstlisting}[
+style = ironpython,
+numbers = none
+]
+{  # широкий диапазон -> логарифмическая шкала
+    "learning_rate": tune.loguniform(lower=1 / 1024, upper=1.0)
+}
+\end{lstlisting}
+
+Если же диапазон невелик, то выборка выполняется в линейном масштабе
+\begin{lstlisting}[
+style = ironpython,
+numbers = none
+]
+{  # узкий диапазон -> линейная шкала
+    "learning_rate": tune.uniform(lower=0.1, upper=0.2)
+}
+\end{lstlisting}
+
+Если требуется квантонизовать пространство поиска, то можно использовать \verb|tune.qlograndint|,  \verb|tune.qloguniform| и пр.
+\begin{lstlisting}[
+style = ironpython,
+numbers = none
+]
+{  # 0.1, 0.12, 0.14, ...
+    "learning_rate": tune.quniform(lower=0.1, upper=0.2, q=0.02)
+}
+\end{lstlisting}
+
+Пространство поиска можно скоректировать с помощью пользовательского класса
+
+\begin{lstlisting}[
+style = ironpython,
+numbers = none
+]
+from flaml import tune 
+from flaml.automl.model import XGBoostSklearnEstimator
+
+class XGBoost2D(XGBoostSklearnEstimator):
+    @classmethod
+    def search_space(cls, data_size, task):
+        upper = min(32_768, int(data_size))
+        
+        # подбираем только 2 гиперпараметра
+        return {
+            "n_estimators": {
+                "domain": tune.lograndint(lower=4, upper=upper),
+                "low_cost_init_value": 4,
+            },
+            "max_leaves": {
+                "domain": tune.lograndint(lower=4, upper=upper),
+                "low_cost_init_value": 4,
+            }
+        }
+\end{lstlisting}
+
+После нужно обязательно зарегистрировать пользовательский класс в экземляре \verb|AutoML| и указать либо максимальное число итераций, либо бюджет времени
+\begin{lstlisting}[
+style = ironpython,
+numbers = none
+]
+automl = AutoML()
+automl.add_learner(learner_name="my_xgb", learner_class=XGBoost2D)
+automl.fit(X_train, y_train, task="regression", estimator_list=["my_xgb"], max_iter=100)
+\end{lstlisting}
+
+Или можно передать методу \verb|fit| экземпляра класса модели \verb|AutoML| (обязательно нужно задать \verb|max_iter| или \verb|time_budget| (задается в секундах), в противном случае изменения не будут учитываться)
+\begin{lstlisting}[
+style = ironpython,
+numbers = none
+]
+custom_hp = {
+    "xgboost": {
+        "n_estimators": {
+            "domain": tune.lograndint(lower=new_lower, upper=new_upper),
+            "low_cost_init_valu": new_lower,
+        },
+    },
+    "rf": {
+        "max_leaves": {
+            "domain": None  # disable search
+        },
+    },
+    "lgbm": {
+        "subsample": {
+            "domain": tune.uniform(lower=0.1, upper=0.9),
+            "init_value": 1.0,
+        },
+        "subsample_freq": {
+            "domain": 1  # subsample_freq must > 0 to enable subsample  
+        },
+    },
+}
+\end{lstlisting}
+
+То есть
+\begin{lstlisting}[
+style = ironpython,
+numbers = none
+]
+from flaml import tune
+
+automl = AutoML()
+
+custom_hp = {
+    "xgboost": {
+        "gamma": {
+            "domain": tune.uniform(lower=1, upper=10),
+            "init_value": 1,
+            "low_cost_init_value": 10,
+        },
+        "reg_alpha": {
+            "domain": None,  # disable search
+        },
+        "n_estimators": {
+            "domain": tune.lograndint(lower=100, upper=350),
+            "low_cost_init_value": 100,
+        },
+    }
+}
+
+automl.fit(
+    X_train, y_train,
+    task="regression",
+    estimators=["xgboost"],
+    custom_hp=custom_hp,
+    time_budget=120  # или max_iter=100
+)
+\end{lstlisting}
+
+Можно задать ограничение на время (в секундах) обучения модели и на время построения прогноза с помощью параметров \verb|train_time_limit| и \verb|pred_time_limit|.
+
+Еще можно ограничить ошибки на обучающем и/или валидационном поднаборах
+\begin{lstlisting}[
+style = ironpython,
+numbers = none
+]
+metric_constraints = [("train_loss", "<=", 0.1), ("val_loss", "<=", 0.1)]
+automl.fit(X_train, y_train, max_iter=100, train_time_limit=1, metric_constraints=metric_constraints)
+\end{lstlisting}
+
+\subsection{Stacking}
+
+Модели с подобранными гиперпараметрами можно собрать в ансамбль с помьщю процедуры стекинга: либо выставить \verb|ensemble=True|, либо передать словарь. Когда \verb|ensemble=True|, автоматически строится стекинговая модель
+\begin{lstlisting}[
+style = ironpython,
+numbers = none
+]
+automl.fit(
+    X_train, y_train, task="regression",
+    ensemble={
+        "final_estimator": RidgeCV(),  # мета-модель
+        "passthrough": False,  # не передавать исходные признаки
+    },
+    max_iter=100,
+)
+
+automl.model
+"""
+StackingRegressor(estimators=[('rf',
+	<flaml.automl.model.RandomForestEstimator object at 0x7f3425fadee0>),
+	('extra_tree',
+	<flaml.automl.model.ExtraTreesEstimator object at 0x7f3425fb2a30>),
+	('lgbm',
+	<flaml.automl.model.LGBMEstimator object at 0x7f3425fb2550>),
+	('xgboost',
+	<flaml.automl.model.XGBoostSklearnEstimator object at 0x7f3425fb2a60>),
+	('xgb_limitdepth',
+	<flaml.automl.model.XGBoostLimitDepthEstimator object at 0x7f3425fb4580>)],
+	final_estimator=RidgeCV(), n_jobs=1)
+"""
+automl.model.predict(X_test)
+\end{lstlisting}
+
+\subsection{Стратегии разбиения на обучающий и валидационный поднаборы данных}
+
+По умолчанию FLAML разбивает набор данных автоматически в зависимости от размера набора данных и ограничении на время поиска конфигурации. Но можно управлять разбиением и в ручную. Можно либо использовать отложенную выборку (\verb|eval_method="holdout"|), либо перекрестную проверку \verb|eval_method="cv"|.
+
+Для отложенной выборки:
+\begin{itemize}
+	\item \verb|split_ratio|: доля валидационного набора (по умолчанию 0.1),
+	
+	\item \verb|X_val|, \verb|y_val|: отдельный валидационный набор. Если передан, то валидационные метрики вычисляются на этом валидационном наборе. Если не передан, то валидационный набор выделяется из обучающего набора. После подбора гиперпараметров, модель заново обучается на лучшей комбинации на полном обучающем наборе.
+\end{itemize}
+
+Для перекрестной проверки можно задать число фолдов \verb|n_splits| (по умолчанию 5).
+
+Поддерживаются следующие стратегии \verb|split_type|:
+\begin{itemize}
+	\item для задач классификации: \verb|auto| (\verb|stratified|), \verb|stratified|, \verb|uniform|, \verb|time|, \verb|group|,
+	
+	\item для задач регрессии: \verb|auto| (\verb|uniform|), \verb|uniform|, \verb|time|,
+	
+	\item для временных рядов: \verb|auto| или \verb|time|
+	
+	\item и пр.
+\end{itemize}
+
+ВАЖНО: когда последовательный и параллельный подбор гиперпараметров имеют схожие временные издержки, то предпочтение следует отдавать \emph{последовательной} стратегии подбора.
+
+\subsection{Теплый старт}
+
+Можно использовать <<теплый старт>> на базе полученных конфигураций гиперпараметров для каждой модели. 
+\begin{lstlisting}[
+style = ironpython,
+numbers = none
+]
+automl1 = AutoML()
+# обучаемся в течение 1 часа
+automl1.fit(X_train, y_train, time_budget=3600)
+
+automl2 = AutoML()
+automl2.fit(
+    X_trian, y_train,
+    # продолжаем обучение в течение еще 2 часов
+    time_budget=7200,
+    starting_points=automl1.best_config_per_estimator
+)
+\end{lstlisting}
+
+\subsection{Получение лучшей модели}
+
+Чтобы получить лучшую модель, нужно запросить значение атрибута \verb|model|
+\begin{lstlisting}[
+style = ironpython,
+numbers = none
+]
+automl.fit(X_train, y_train, task="regression")
+automl.best_estimator  # xgboost
+automl.model  # <flaml.automl.model.XGBoostSklearnEstimator at 0x7f3425adea00>
+\end{lstlisting}
+
+Получить саму обученную модель можно так
+\begin{lstlisting}[
+style = ironpython,
+numbers = none
+]
+automl.model.estimator 
+"""
+XGBRegressor(base_score=None, booster=None, callbacks=[],
+	colsample_bylevel=0.9573549467024939, colsample_bynode=None,
+	colsample_bytree=0.7496135390795017, early_stopping_rounds=None,
+	enable_categorical=False, eval_metric=None, feature_types=None,
+	gamma=None, gpu_id=None, grow_policy='lossguide',
+	importance_type=None, interaction_constraints=None,
+	learning_rate=0.07299317690396159, max_bin=None,
+	max_cat_threshold=None, max_cat_to_onehot=None,
+	max_delta_step=None, max_depth=0, max_leaves=22,
+	min_child_weight=18.541277231179432, missing=nan,
+	monotone_constraints=None, n_estimators=57, n_jobs=-1,
+	num_parallel_tree=None, predictor=None, random_state=None, ...)
+"""
+\end{lstlisting}
+
+\subsection{Как настроивать ограничение по времени}
+
+Если, например, нижняя граница на поиска (скажем 60 сек) и верхняя граница (пусть 2400 сек), то можно поробовать задать \verb|time_budget=60| и никаких сообщений и рекомендаций по увеличению временного бюджета не будет, то на этом можно остановиться. Если рекомендуется увеличить бюджет по времени, то пробуем верхнюю границу с \verb|early_stop=True|.
+
+Для того чтобы прикинуть сколько времени потребуется на поиск наилучшей конфигурации, можно запустить обучение с двумя итерациями, а затем изучить логи
+\begin{lstlisting}[
+style = ironpython,
+numbers = none
+]
+automl.fit(
+    X_train, y_train, task="regression",
+    custom_hp={"xgboost": { "n_estimators": {"domain": tune.lograndint(10, 25)}  }},
+    max_iter=2
+)
+# INFO - iteration 0, current learner lgbm
+# INFO - Estimated sufficient time budget=10000s. Estimated necessary time budget=10s.
+\end{lstlisting}
+
+То есть \emph{предполагаемый необходимый} временной бюджет 10 секунд (estimated sufficient time budget), а \emph{предполагаемый достаточный} -- 10 000 секунд (estimator necessary time budget). Это очень грубая оценка, просто ориентир.
+
+Если временной бюджет слишком низкий, то может получиться, что ни одна модель за отведенное время не обучилась. В этом случае лучше использовать \verb|max_iter|, а не \verb|time_budget|.
+
+\subsection{Алгоритмы подбора гиперпараметров}
+
+FLAML использует два метода:
+\begin{itemize}
+	\item CFO (Frugal Optimizatoin for Cost-related Hyperparameters),
+	
+	\item BlendSearch.
+\end{itemize}
+
+CFO использует метод случайного прямого поиска $ FLOW^2 $ с адаптивным размером шага и случайным рестартом. Он требует начальной точки низкой стоимости (low-cost initial point). 
+
+$ FLOW^2 $ это простой эффективный метод стохастического прямого поиска. Однако, если пространство поиска сложное, а алгоритм <<залипает>> на локальных минимумах, то имеет смысл рассмотреть алгоритм BlendSearch.
+
+BlendSearch сочетает в себе локальный и глобальный поиск. Как и CFO BlendSearch требует начальной точки низкой стоимости.
+
+\subsection{Zero Shot AutoML}
+
+\verb|flaml.default| -- пакет zero-shot AutoML или <<no-tuning>> AutoML. Он использует \verb|flaml.AutoML| и \verb|flaml.default.portfolio| для поиска хороших конфигураций и предлагает ориентированные на данные конфигурации во время выполнения без дорого подбора гиперпараметров.
+
+Достоинства Zero-shot AutoML:
+\begin{itemize}
+	\item Вычислительные затраты только на обучение одной модели. Подбор гиперпараметров не требуется.
+	
+	\item Конфигурация предлагается мгновенно. Нет никаких накладных расходов.
+\end{itemize}
+
+Например, если сейчас решение выглядит так
+\begin{lstlisting}[
+style = ironpython,
+numbers = none
+]
+from ligthgbm import LGBRegressor
+
+estimator = LGBMRegressor()
+estimator.fit(X_trian, y_train)
+estimator.predict(X_test)
+\end{lstlisting}
+то нужно только заменить строку импотра
+\begin{lstlisting}[
+style = ironpython,
+numbers = none
+]
+from flaml.default import LGBMRegressor
+\end{lstlisting}
+
+Ожидается, что в большинстве случаев модель будет работать также или лучше.
+
+На текущий момент поддреживаются следующие модели:
+\begin{itemize}
+	\item LGBMClassifier, LGBMRegressor,
+	
+	\item XGBClassifier, XGBRegressor,
+	
+	\item RandomForestClassifier, RandomForestRegressor,
+	
+	\item ExtraTreesClassifier, ExtraTreesRegressor.
+\end{itemize}
+
+\verb|flaml.default.LGBMRegressor| принимает решение о конфигурации гиперпараметров на базе обучающего набора данных. Если прогнозируется прирост эффективности по сравнению с конфигурацией по умолчанию, то будет использована зависящая от данных конфигурация.
+
+Перед запуском можно посмотреть  предлагаему конфигурацию
+\begin{lstlisting}[
+style = ironpython,
+numbers = none
+]
+from flaml.default import LGBMRegressor
+
+reg = LGBMRegressor()
+hyperparams, estimator_name, X_transformed, y_transformed = reg.suggest_hyperparams(X_train, y_train)
+print(hyperparams)
+\end{lstlisting}
+
+\subsection{Мультицель в задаче регрессии}
+
+\begin{lstlisting}[
+style = ironpython,
+numbers = none
+]
+from flaml import AutoML
+from sklearn.datasets import make_regression
+from sklearn.model_selection import train_test_split
+from sklearn.multioutput import MultiOutputRegressor
+
+# целевая переменная будет содержать 3 подцели
+X, y = make_regressor(n_targets=3)
+
+X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.30, random_state=42)
+model = MultiOutputRegressor(AutoML(task="regression", time_budget=60))
+model.fit(X_train, y_train)
+
+print(model.predict(X_test))
+\end{lstlisting}
+
+
+
+
+
 
 \section{Дисбаланс классов}
 
