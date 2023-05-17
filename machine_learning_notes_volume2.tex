@@ -229,7 +229,7 @@ style = ironpython,
 numbers = none
 ]
 dtrain = xgb.DMatrix(X_train, y_train)
-dtest = xgb.DMatrix(X_test, y_test)
+dtest = xgb.DMatrix(X_test)
 
 xgb.train(
     {
@@ -318,6 +318,27 @@ SHAP = booster.predict(Xy, pred_interactions=True)
 		\item еще можно уменьшить темп обучения \verb|eta| (тогда нужно будет увеличить число итераций градиентного бустинга \verb|num_round|, так как эти параметры сильно связаны и подбираются в паре).
 	\end{itemize}
 \end{enumerate}
+
+Рекомендации по значениям гиперпараметров XGBoost:
+\begin{itemize}
+	\item \verb|gamma| $ [0, +\infty) $: от 0 до $ \approx 1000  $ в логарифмическом масштабе,
+	
+	\item \verb|alpha|: параметр $ L_2 $-регуляризации, от 0 до $ \approx 1000  $ в логарифмическом масштабе,
+	
+	\item \verb|lambda|: параметр $ L_1 $-регуляризации, от 0 до $ \approx 1000  $ в логарифмическом масштабе,
+	
+	\item \verb|max_depth| $ [0, +\infty) $: от 1 до 15-20 в линейном масштабе,
+	
+	\item \verb|min_child_weight| $ [0, +\infty) $: от 0 до 15-20 линейном масштабе,
+	
+	\item \verb|learning_rate| $ [0, 1] $: 0.0001 0.001, 0.01, 0.1 и 1.0 (темп обучения ограничивает вклад каждого базового алгоритма в ансамбль, поэтому разумно ограничится единичкой справа),
+	
+	\item \verb|subsample| $ (0, 1] $: от 0.5 до 1.0 в линейном масштабе,
+	
+	\item \verb|colsample_bytree| $ (0, 1] $: от 0.5 до 1.0 в линейной масштабе; полезен для больших наборов данных или когда есть проблема \emph{мультиколлинеарности},
+	
+	\item \verb|colsample_bylevel| \& \verb|colsample_bynode| $ (0, 1] $: от 0.5 до 1.0 в линейной масштабе; полезен для наборов данных с \emph{большим числом сильно скоррелированных признаков}.
+\end{itemize}
 
 Чтобы увеличить скорость обучения модели, можно параметру \verb|tree_method| передать значение \verb|hist| или \verb|gpu_hist|.
 
@@ -573,13 +594,23 @@ numbers = none
 ypred = bst.predict(dtest)
 \end{lstlisting}
 
-Если число итераций градиентного бустинга подбиралось с помощью ранней остановки, то прогноз можно построить для нескольких итераций градиентного бустинга
+Если число итераций градиентного бустинга подбиралось с помощью ранней остановки, то прогноз для лучшей итерации можно получить так
 \begin{lstlisting}[
 style = ironpython,
 numbers = none
 ]
-ypred = bst.predict(dtest, iteration_range(0, bst.best_iteration + 1))
+ypred = bst.predict(dtest, iteration_range=(0, bst.best_iteration + 1))
 \end{lstlisting}
+
+Как отмечается в документации XGBoost 2.0.0-dev, если используется ранняя остановка, то функции постороения прогноза, включая методы \verb|xgboost.XGBModel.predict()|, \verb|xgboost.XGBModel.score()| и \verb|xgboost.XGBModel.apply()| будут автоматически использовать лучшую модель.
+
+{\itshape
+When early stopping is enabled, prediction functions including the \verb|xgboost.XGBModel.predict()|, \verb|xgboost.XGBModel.score()|, and \verb|xgboost.XGBModel.apply()| methods will use the best model automatically.
+
+Meaning the \verb|xgboost.XGBModel.best_iteration| is used to specify the range of trees used in prediction
+}
+
+Чтобы закешировать результаты инкрементного прогноза, следует воспользоваться методом \verb|xgboost.Booster.predict()|.
 
 \subsubsection{Scikit-learn интерфйес}
 
@@ -604,8 +635,33 @@ booster: xgb.Booster = reg.get_booster()
 \subsubsection{Core Data Structure}
 
 \verb|xgboost.DMatrix|: это внутренняя структура данных XGBoost, оптимизированная и по памяти, и по скорости обучения.
+\begin{lstlisting}[
+style = ironpython,
+numbers = none
+]
+dtrain = xgb.DMatrix(X_train, y_train)
+dtest = xgb.DMatrix(X_test)
 
-\verb|xgboost.QuantileDMatrix|: это вариант \verb|DMatrix|, который строит квантилизованные наборы для \verb|hist| и \verb|gpu_hist| методов. Этот класс был разработан специально для снижения потребления памяти в ходе обучения. Нельзя использовать квантильную матрицу данных \verb|QuantileDMatrix| в качестве валидационного / тестового набора данных \emph{без} привязки (параметр \verb|ref|) к обучающему набору данных \verb|QuantileDMatrix|, так как в ходе квантенизации может быть потеряна часть информации.
+bst = xgb.train(
+    params,
+    dtrain,
+    evals=[(dtrain, "train"), (xgb.DMatrix(X_test, y_test), "test")],
+    num_boost_round=350,
+    early_stopping_rounds=10,
+)
+
+bst.predict(dtest)
+\end{lstlisting}
+
+\verb|xgboost.QuantileDMatrix|: это вариант \verb|DMatrix|, который используется гистограммными методами для сохранения памяти (\verb|hist| и \verb|gpu_hist|). Этот класс был разработан специально для снижения потребления памяти в ходе обучения. Нельзя использовать квантильную матрицу данных \verb|QuantileDMatrix| в качестве валидационного / тестового набора данных \emph{без} привязки (параметр \verb|ref|) к обучающему набору данных \verb|QuantileDMatrix|, так как в ходе квантенизации может быть потеряна часть информации.
+
+ВАЖНО: если на большом наборе данных возникают ошибки нехватки памяти, то имеет смысл попробовать \verb|xgboost.QuantileDMatrix|. Если данные уже находятся на графическом процессоре, то \verb|inplace_predict| может быть более предпочтительным вариантом, чем \verb|predict|. \verb|QuantileDMatrix| и \verb|inplace_predict| используются по умолчанию, если работа с моделью ведется через scikit-learn интерфейс.
+
+\noindent{\itshape
+If you are getting out-of-memory errors on a big dataset, try the or \verb|xgboost.QuantileDMatrix| or external memory version. Note that when external memory is used for GPU hist, it’s best to employ gradient based sampling as well. Last but not least, \verb|inplace_predict| can be preferred over predict when data is already on GPU. Both \verb|QuantileDMatrix| and \verb|inplace_predict| are automatically enabled if you are using the scikit-learn interface.
+}
+
+Как отмечается в документации XGBoost 2.0.0-dev, когда параметр \verb|tree_method| получает значение \verb|hist| или \verb|gpu_hist| для \emph{экономии памяти} вместо матрицы \verb|DMatrix| будет использоваться матрица \verb|QuantileDMatrix|. Однако, когда устройство с входным данными (device of input data) несогласовао с алгоритмом, то производительность может снизиться. Например, если вход это numpy-массив на CPU, но параметр \verb|tree_method| получил значение \verb|gpu_hist|, то данные сначала будут обрабатываться на CPU, а только потом на GPU.
 
 Метод бустера \verb|get_score(fmap="", importance_type="weight")| можно вычислить важность признаков. Для деревянных моделей важность определяется как
 \begin{itemize}
@@ -620,7 +676,18 @@ booster: xgb.Booster = reg.get_booster()
 	\item \verb|"total_cover"|: общее покрытые по всем разбиениям, в которых признак принимал участие.
 \end{itemize} 
 
-Метод бустера \verb|inplace_predict| строит прогноз <<на месте>>. В отличие от метода \verb|predict|, предсказание на месте не кеширует результат прогноза.
+Метод бустера \verb|inplace_predict| строит прогноз <<на месте>>. В отличие от метода \verb|predict|, предсказание на месте не кеширует результат прогноза
+\begin{lstlisting}[
+style = ironpython,
+numbers = none
+]
+# Прогноз строится на X_test, а не на dtest!
+np.rint(clf.get_booster().inplace_predict(X_test)).astype(np.int_)
+
+# Для сравнения
+clf.predict(X_test)
+np.rint(clf.get_booster().predict(dtest)).astype(np.int_)  # Здесь нужно передавать dtest
+\end{lstlisting}
 
 В методе \verb|predict| можно указать флаг \verb|pred_contribs=True|, и тогда вернется матрица размера $ n_{samples} \times (n_{feats} + 1) $, в которой каждая строка означает \emph{вклад признаков} (значения SHAP) в соответсвующий прогноз. Последний столбец это смещение.
 
@@ -684,6 +751,90 @@ numbers = none
 	
 	\item \verb|suffle|: перетасовывает данные перед разбиением на фолды.
 \end{itemize}
+
+\begin{lstlisting}[
+style = ironpython,
+numbers = none
+]
+import json
+
+bst = xgb.train(
+     {  # params
+     	"objective": "binary:logistic",
+     	"eta": 0.05,
+     	"max_depth": 3,
+     	"subsample": 0.85,
+     	"colsample_bytree": 0.75,
+     	"tree_method": "hist"
+     },
+    dtrain,
+    num_boost_round=1_000,
+    evals=[(dtrain, "train"), (dtest, "test")],
+    callbacks=[xgb.callback.EarlyStopping(5)],
+)
+
+print(json.loads(bst.save_config()))
+"""
+{'learner': {'generic_param': {'fail_on_invalid_gpu_id': '0',
+			'gpu_id': '-1',
+			'n_jobs': '0',
+			'nthread': '0',
+			'random_state': '0',
+			'seed': '0',
+			'seed_per_iteration': '0',
+			'validate_parameters': '1'},
+		'gradient_booster': {'gbtree_model_param': {'num_parallel_tree': '1',
+				'num_trees': '145',
+				'size_leaf_vector': '0'},
+			'gbtree_train_param': {'predictor': 'auto',
+				'process_type': 'default',
+				'tree_method': 'hist',
+				'updater': 'grow_quantile_histmaker',
+				'updater_seq': 'grow_quantile_histmaker'},
+			'name': 'gbtree',
+			'specified_updater': False,
+			'updater': {'grow_quantile_histmaker': {'train_param': {'alpha': '0',
+						'cache_opt': '1',
+						'colsample_bylevel': '1',
+						'colsample_bynode': '1',
+						'colsample_bytree': '0.75',
+						'eta': '0.0500000007',
+						'gamma': '0',
+						'grow_policy': 'depthwise',
+						'interaction_constraints': '',
+						'lambda': '1',
+						'learning_rate': '0.0500000007',
+						'max_bin': '256',
+						'max_cat_threshold': '64',
+						'max_cat_to_onehot': '4',
+						'max_delta_step': '0',
+						'max_depth': '3',
+						'max_leaves': '0',
+						'min_child_weight': '1',
+						'min_split_loss': '0',
+						'monotone_constraints': '()',
+						'refresh_leaf': '1',
+						'reg_alpha': '0',
+						'reg_lambda': '1',
+						'sampling_method': 'uniform',
+						'sketch_ratio': '2',
+						'sparse_threshold': '0.20000000000000001',
+						'subsample': '0.850000024'}}}},
+		'learner_model_param': {'base_score': '5E-1',
+			'boost_from_average': '1',
+			'num_class': '0',
+			'num_feature': '30',
+			'num_target': '1'},
+		'learner_train_param': {'booster': 'gbtree',
+			'disable_default_eval_metric': '0',
+			'dsplit': 'auto',
+			'objective': 'binary:logistic'},
+		'metrics': [{'name': 'logloss'}],
+		'objective': {'name': 'binary:logistic',
+			'reg_loss_param': {'scale_pos_weight': '1'}}},
+	'version': [1, 7, 5]}
+"""
+\end{lstlisting}
 
 \subsubsection{Scikit-Learn API}
 
@@ -835,11 +986,1259 @@ print(df[np.isinf(df['Label (upper bound)'])])
 bst.save_model('aft_best_model.json')
 \end{lstlisting}
 
+\subsection{Подбор гиперпараметров XGBoost на отложенной выборке с подрезкой <<слабых>> запусков}
+
+\begin{lstlisting}[
+style = ironpython,
+numbers = none
+]
+import numpy as np
+import optuna
+
+import sklearn.datasets
+import sklearn.metrics
+from sklearn.model_selection import train_test_split
+import xgboost as xgb
+
+
+# FYI: Objective functions can take additional arguments
+# (https://optuna.readthedocs.io/en/stable/faq.html#objective-func-additional-args).
+def objective(trial):
+	data, target = sklearn.datasets.load_breast_cancer(return_X_y=True)
+	train_x, valid_x, train_y, valid_y = train_test_split(data, target, test_size=0.25)
+	dtrain = xgb.DMatrix(train_x, label=train_y)
+	dvalid = xgb.DMatrix(valid_x, label=valid_y)
+
+	param = {
+		"verbosity": 0,
+		"objective": "binary:logistic",
+		"eval_metric": "auc",
+		"booster": trial.suggest_categorical("booster", ["gbtree", "gblinear", "dart"]),
+		"lambda": trial.suggest_float("lambda", 1e-8, 1.0, log=True),
+		"alpha": trial.suggest_float("alpha", 1e-8, 1.0, log=True),
+	}
+
+	if param["booster"] == "gbtree" or param["booster"] == "dart":
+		param["max_depth"] = trial.suggest_int("max_depth", 1, 9)
+		param["eta"] = trial.suggest_float("eta", 1e-8, 1.0, log=True)
+		param["gamma"] = trial.suggest_float("gamma", 1e-8, 1.0, log=True)
+		param["grow_policy"] = trial.suggest_categorical("grow_policy", ["depthwise", "lossguide"])
+	if param["booster"] == "dart":
+		param["sample_type"] = trial.suggest_categorical("sample_type", ["uniform", "weighted"])
+		param["normalize_type"] = trial.suggest_categorical("normalize_type", ["tree", "forest"])
+		param["rate_drop"] = trial.suggest_float("rate_drop", 1e-8, 1.0, log=True)
+		param["skip_drop"] = trial.suggest_float("skip_drop", 1e-8, 1.0, log=True)
+
+	# Add a callback for pruning.
+	pruning_callback = optuna.integration.XGBoostPruningCallback(trial, "validation-auc")
+	bst = xgb.train(param, dtrain, evals=[(dvalid, "validation")], callbacks=[pruning_callback])
+	preds = bst.predict(dvalid)
+	pred_labels = np.rint(preds)
+	accuracy = sklearn.metrics.accuracy_score(valid_y, pred_labels)
+	return accuracy
+
+
+if __name__ == "__main__":
+	study = optuna.create_study(
+		pruner=optuna.pruners.MedianPruner(n_warmup_steps=5), direction="maximize"  # <- NB
+	)
+	study.optimize(objective, n_trials=100)
+	print(study.best_trial)
+\end{lstlisting}
+
+\subsection{Подбор гиперпараметров XGBoost с перекрестной проверкой и подрезкой <<слабых>> запусков}
+
+ВАЖНО: в Optuna диапазоны изменения значений гиперпараметров задаются явно; если требуется искать значения в логарифмическом масштабе, то просто добавляется флаг \verb|log=True|. В hyperopt в качестве верхних и нижних границ указывается результат преобразования $ \exp(lower) $ или $ \exp(upper) $; то есть если к примеру темп обучения изменяется в диапазоне от значения близкого к нулю до единицы, то в hyperopt придется писать так
+
+\verb|"learning_rate": hp.loguniform("learning_rate", -7, 0)|
+так как $ e^{-7} \approx 0 $, а $ e^0 = 1 $.
+
+Или пусть параметр регуляризации $ \lambda $ изменяется в диапазоне от значения близкого к нулю до нескольких тысяч, тогда \verb|"lambda": hp.loguniform("lambda", -10, 10)|, так как $ e^{-10} \approx 0 $, а $ e^{10} > 10 \, 000 $.
+
+
+
+
+\begin{lstlisting}[
+style = ironpython,
+numbers = none
+]
+import optuna
+
+import sklearn.datasets
+import xgboost as xgb
+
+
+def objective(trial):
+	train_x, train_y = sklearn.datasets.load_breast_cancer(return_X_y=True)
+	dtrain = xgb.DMatrix(train_x, label=train_y)
+
+	param = {
+		"verbosity": 0,
+		"objective": "binary:logistic",
+		"eval_metric": "auc",  # <- NB
+		"booster": trial.suggest_categorical("booster", ["gbtree", "gblinear", "dart"]),
+		"lambda": trial.suggest_float("lambda", 1e-8, 1.0, log=True),
+		"alpha": trial.suggest_float("alpha", 1e-8, 1.0, log=True),
+	}
+
+	if param["booster"] == "gbtree" or param["booster"] == "dart":
+		param["max_depth"] = trial.suggest_int("max_depth", 1, 9)
+		param["eta"] = trial.suggest_float("eta", 1e-8, 1.0, log=True)
+		param["gamma"] = trial.suggest_float("gamma", 1e-8, 1.0, log=True)
+		param["grow_policy"] = trial.suggest_categorical("grow_policy", ["depthwise", "lossguide"])
+	if param["booster"] == "dart":
+		param["sample_type"] = trial.suggest_categorical("sample_type", ["uniform", "weighted"])
+		param["normalize_type"] = trial.suggest_categorical("normalize_type", ["tree", "forest"])
+		param["rate_drop"] = trial.suggest_float("rate_drop", 1e-8, 1.0, log=True)
+		param["skip_drop"] = trial.suggest_float("skip_drop", 1e-8, 1.0, log=True)
+
+	pruning_callback = optuna.integration.XGBoostPruningCallback(trial, "test-auc")
+	history = xgb.cv(param, dtrain, num_boost_round=100, callbacks=[pruning_callback])
+	
+	mean_auc = history["test-auc-mean"].values[-1]  # <- NB
+	return mean_auc
+
+
+if __name__ == "__main__":
+	pruner = optuna.pruners.MedianPruner(n_warmup_steps=5)
+	study = optuna.create_study(pruner=pruner, direction="maximize")
+	study.optimize(objective, n_trials=100)
+	
+	print("Number of finished trials: {}".format(len(study.trials)))
+	
+	print("Best trial:")
+	trial = study.best_trial
+	
+	print("  Value: {}".format(trial.value))
+	
+	print("  Params: ")
+	for key, value in trial.params.items():
+		print("    {}: {}".format(key, value))	
+\end{lstlisting}
+
+
 
 
 \section{LightGBM}
 
-\section{CatBoost}
+\subsection{Подбор гиперпараметров LightGBM с подрезкой <<слабых>> запусков}
+
+\begin{lstlisting}[
+style = ironpython,
+numbers = none
+]
+import numpy as np
+import optuna
+
+import lightgbm as lgb
+import sklearn.datasets
+import sklearn.metrics
+from sklearn.model_selection import train_test_split
+
+
+# FYI: Objective functions can take additional arguments
+# (https://optuna.readthedocs.io/en/stable/faq.html#objective-func-additional-args).
+def objective(trial):
+	data, target = sklearn.datasets.load_breast_cancer(return_X_y=True)
+	train_x, valid_x, train_y, valid_y = train_test_split(data, target, test_size=0.25)
+	dtrain = lgb.Dataset(train_x, label=train_y)
+	dvalid = lgb.Dataset(valid_x, label=valid_y)
+
+	param = {
+		"objective": "binary",
+		"metric": "auc",
+		"verbosity": -1,
+		"boosting_type": "gbdt",
+		"lambda_l1": trial.suggest_float("lambda_l1", 1e-8, 10.0, log=True),
+		"lambda_l2": trial.suggest_float("lambda_l2", 1e-8, 10.0, log=True),
+		"num_leaves": trial.suggest_int("num_leaves", 2, 256),
+		"feature_fraction": trial.suggest_float("feature_fraction", 0.4, 1.0),
+		"bagging_fraction": trial.suggest_float("bagging_fraction", 0.4, 1.0),
+		"bagging_freq": trial.suggest_int("bagging_freq", 1, 7),
+		"min_child_samples": trial.suggest_int("min_child_samples", 5, 100),
+	}
+
+	# Add a callback for pruning.
+	pruning_callback = optuna.integration.LightGBMPruningCallback(trial, "auc")
+	gbm = lgb.train(param, dtrain, valid_sets=[dvalid], callbacks=[pruning_callback])
+
+preds = gbm.predict(valid_x)
+pred_labels = np.rint(preds)
+accuracy = sklearn.metrics.accuracy_score(valid_y, pred_labels)
+return accuracy
+
+
+if __name__ == "__main__":
+	study = optuna.create_study(
+		pruner=optuna.pruners.MedianPruner(n_warmup_steps=10), direction="maximize"  # <- NB
+	)
+	study.optimize(objective, n_trials=100)
+	
+	print("Number of finished trials: {}".format(len(study.trials)))
+	
+	print("Best trial:")
+	trial = study.best_trial
+	
+	print("  Value: {}".format(trial.value))
+	
+	print("  Params: ")
+	for key, value in trial.params.items():
+		print("    {}: {}".format(key, value))
+\end{lstlisting}
+
+
+\subsection{Подбор гиперпараметров для LightGBM с помощью Optuna LightGBMTuner}
+
+\url{https://medium.com/optuna/lightgbm-tuner-new-optuna-integration-for-hyperparameter-optimization-8b7095e99258}
+
+Наивный способ подбора гиперпараметров с помощью Optuna мог бы выглядет так
+\begin{lstlisting}[
+style = ironpython,
+numbers = none
+]
+def objective(trial):
+	data, target = sklearn.datasets.load_breast_cancer(return_X_y=True)
+	train_x, test_x, train_y, test_y = train_test_split(data, target, test_size=0.25)
+	dtrain = lgb.Dataset(train_x, label=train_y)
+
+	param = {
+		'objective': 'binary',
+		'metric': 'binary_logloss',
+		'lambda_l1': trial.suggest_loguniform('lambda_l1', 1e-8, 10.0),
+		'lambda_l2': trial.suggest_loguniform('lambda_l2', 1e-8, 10.0),
+		'num_leaves': trial.suggest_int('num_leaves', 2, 256),
+		'feature_fraction': trial.suggest_uniform('feature_fraction', 0.4, 1.0),
+		'bagging_fraction': trial.suggest_uniform('bagging_fraction', 0.4, 1.0),
+		'bagging_freq': trial.suggest_int('bagging_freq', 1, 7),
+		'min_child_samples': trial.suggest_int('min_child_samples', 5, 100),
+	}
+
+	gbm = lgb.train(param, dtrain)
+	preds = gbm.predict(test_x)
+	pred_labels = np.rint(preds)
+	accuracy = sklearn.metrics.accuracy_score(test_y, pred_labels)
+	return accuracy
+
+study = optuna.create_study(direction='maximize')
+study.optimize(objective, n_trials=100)
+
+print('Number of finished trials:', len(study.trials))
+print('Best trial:', study.best_trial.params)
+\end{lstlisting}
+
+В этом примере Optuna пытается найти наилучшую комбинацию 7 различных гиперпараметров (параметр регуляризации $ L_1 $, число терминальных узлов \verb|num_leaves| и пр.). Суммарное количество комбинаций это произведение всех пространств поиска каждого гиперпараметра.
+
+Не смотря на то, что существует много методов поиска наилучшей комбинации гиперпараметров за наименьшее количество запусков, все же имеет смысл рассмотреть альтернативный \emph{метод последовательного подбора} (stepwise algorithm) -- он, как понятно из названия, подбирает параметры последовательно и итоговое пространство поиска будет представлять собой \emph{сумму} (а не произведение!!!) пространств поиска. 
+
+{\color{blue}Класс \verb|optuna.integration.lightgbm.LightGBMTuner| реализует именно \emph{последовательный алгоритм подбора гиперпараметров}.}
+
+\verb|LIghtGBMTuner| \emph{последовательно} (stepwise manner) подбирает следующие гиперпараметры :
+\begin{itemize}
+	\item \verb|lambda_l1|,
+	
+	\item \verb|lambda_l2|,
+	
+	\item \verb|num_leaves|,
+	
+	\item \verb|featuer_fraction|,
+	
+	\item \verb|bagging_fraction|,
+	
+	\item \verb|bagging_freq|,
+	
+	\item \verb|min_child_samples|.
+\end{itemize}
+
+Для того чтобы использовать \verb|LightGBMTuner| нужно изменить лишь строку импотра библиотеки \verb|ligthgbm|
+
+\begin{lstlisting}[
+style = ironpython,
+numbers = none
+]
+import lightgbm as lgb  # было
+import optuna.integration.lightgm as lgb  # стало!
+
+from lightgbm import early_stopping
+from lightgbm import log_evaluation
+import sklearn.datasets
+from sklearn.metrics import accuracy_score
+from sklearn.model_selection import train_test_split
+
+
+if __name__ == "__main__":
+	data, target = sklearn.datasets.load_breast_cancer(return_X_y=True)
+	train_x, val_x, train_y, val_y = train_test_split(data, target, test_size=0.25)
+	dtrain = lgb.Dataset(train_x, label=train_y)
+	dval = lgb.Dataset(val_x, label=val_y)
+
+	params = {
+		"objective": "binary",
+		"metric": "binary_logloss",
+		"verbosity": -1,
+		"boosting_type": "gbdt",
+	}
+
+	model = lgb.train(   # здесь начинается ПОСЛЕДОВАТЕЛЬНЫЙ подбор гиперпараметров
+		params,
+		dtrain,
+		valid_sets=[dtrain, dval],
+		callbacks=[early_stopping(100), log_evaluation(100)],
+		time_budget=600,
+		model_dir="./boosters",  # сюда будут записываться модели бустера, например, 14.pkl
+	)
+	
+	prediction = np.rint(model.predict(val_x, num_iteration=model.best_iteration))
+	accuracy = accuracy_score(val_y, prediction)
+	
+	best_params = model.params
+	print("Best params:", best_params)
+	print("  Accuracy = {}".format(accuracy))
+	print("  Params: ")
+	for key, value in best_params.items():
+		print("    {}: {}".format(key, value))
+\end{lstlisting}
+
+Подбор гиперпараметров начинается, когда вызывается функция \verb|lgb.train()|, а построить прогноз можно так
+\begin{lstlisting}[
+style = ironpython,
+numbers = none
+]
+cohen_kappa_score(y_test, np.rint(model.predict(X_test)))  # 0.9750292056074766
+\end{lstlisting}
+
+
+
+
+
+
+
+
+\section{Приемы работы с библиотекой подбора гиперпараметров Optuna}
+
+\url{https://optuna.org/}
+
+Базовые понятия:
+\begin{itemize}
+	\item Study -- оптимизация базируется на целевой функции,
+	
+	\item Trial -- одиночный запуск целевой функции.
+\end{itemize}
+
+Optuna прекрасно работает и с Scikit-learn, и с XGBoost, и с LightGBM, и с прочими популярными библиотеками.
+
+Обычно Optuna используется для подбора гиперпараметров, но может быть использована и для оптимизации пользовательских функций. Для примера рассмотрим простую квадратическую функцию $ (x - 2)^2 $
+\begin{lstlisting}[
+style = ironpython,
+numbers = none
+]
+import optune
+
+def objective(trail):
+    x = trail.suggest_float("x", -10, 10)
+    return (x - 2) ** 2
+
+study = optuna.create_study()
+study.optimize(objective, n_trails=100)
+\end{lstlisting}
+
+Лучшие найденные параметры можно получить так
+\begin{lstlisting}[
+style = ironpython,
+numbers = none	
+]
+study.best_params  # {'x': 1.9914500091892555}
+\end{lstlisting}
+
+Можно запустить оптимизацию еще на 100 запусков
+\begin{lstlisting}[
+style = ironpython,
+numbers = none
+]
+study.optimize(objective, n_trails=100)
+len(study.trials)  # 200
+\end{lstlisting}
+
+Для выбора значений гиперпараметров Optuna предлагает следующие функции:
+\begin{itemize}
+	\item \verb|optuna.trial.Trial.suggest_categorical()| для категориальных параметров,
+	
+	\item \verb|optuna.trial.Trial.suggest_int()| для целочисленных параметров,
+	
+	\item \verb|optuna.trial.Trial.suggest_float()| для вещественных параметров.
+\end{itemize}
+
+Можно указывать шаг (\verb|step|) и можно строить логарифмическую шкалу (\verb|log|)
+\begin{lstlisting}[
+style = ironpython,
+numbers = none	
+]
+import optuna
+
+def objective(trial):
+    optimizer = trial.suggest_categorical("optimizer", ["MomentumSGD", "Adam"])
+    num_layers = trial.suggest_int("num_layers", 1, 3)
+    num_channels = trial.suggest_int("num_channels", 32, 512, log=True)
+    num_units = trial.suggest_int("num_units", 10, 100, step=5)
+    dropout_rate = trial.suggest_float("dropout_rate", 1e-5, 1e-2, log=True)
+    drop_path_rate = trial.suggest_float("drop_path_rate", 0.0, 1.0, step=0.1)
+\end{lstlisting}
+
+\subsection{Эффективные алгоритмы оптимизации}
+
+\subsubsection{Алгоритмы выборки}
+
+Optuna предлагает следующие алгоритмы выборки:
+\begin{itemize}
+	\item Grid Search реализован в \verb|GridSampler|,
+	
+	\item Random Search реализован в \verb|RandomSampler|,
+	
+	\item Парзеновский алгоритм реализован в \verb|TPESampler| (default),
+	
+	\item CMA-ES реализован в \verb|CmaEsSampler|,
+	
+	\item \verb|PartialFixedSampler|,
+	
+	\item Генетический алгоритм недоминирующей сортировки \verb|NSGAIISampler|,
+	
+	\item Алгоритм квази Монте-Карло реализован в \verb|QMCSampler|.
+\end{itemize}
+
+\begin{lstlisting}[
+style = ironpython,
+numbers = none
+]
+study = optuna.create_study()
+print(study.sampler)  # <optuna.samplers._tpe.sampler.TPESampler at 0x7fd7587ded60>
+\end{lstlisting}
+
+По умолчанию используются Парзеновские деревья, но если требуется использовать какую-то другую стратегию выборки, то можно сделать так
+\begin{lstlisting}[
+style = ironpython,
+numbers = none
+]
+study = optuna.create_study(sampler=optuna.samplers.RandomSampler())
+print(study.sampler)  # <optuna.samplers._random.RandomSampler at 0x7fd758737bb0>
+
+study = optuna.create_study(sampler=optuna.sampler.CmaSampler())
+print(study.sampler)  # <optuna.samplers._cmaes.CmaEsSampler at 0x7fd7587de850>
+\end{lstlisting}
+
+\subsubsection{Алгоритмы подрезки}
+
+Алгоритмы подрезки (pruners) автоматически останавливают запуски с низким потенциалом (automated early-stopping).
+
+Optuna предлагает следующие алгоритмы подрезки:
+\begin{itemize}
+	\item Алгоритм медианной подрезки \verb|MedianPruner| (чаще используется этот алгоритм),
+	
+	\item Алгоритм без подрезки \verb|NopPruner|,
+	
+	\item Алгоритм, управляющий подрезкой с помощью допуска \verb|PatientPruner|,
+	
+	\item Алгоритм подрезки заданного процентиля \verb|PercentilePruner|,
+	
+	\item Асинхронный алгоритм последовательного деления пополам \verb|SuccessiveHalvingPruner|,
+	
+	\item \verb|HyperbandPruner|,
+	
+	\item Алгоритм подрезки по порогу \verb|ThresholdPruner|.
+\end{itemize}
+
+Для задач, не связанных с глубоким обучением, эффективнее всего следующие пары <<алгоритм выборки -- алгоритм подрезки>>:
+\begin{itemize}
+	\item Для \verb|RandomSampler|, лучше \verb|MedianPruner|,
+	
+	\item Для \verb|TPESampler|, лучше \verb|HyperbandPruner|.
+\end{itemize}
+
+Для XGBoost использовать подрезку проще всего с помощью 
+
+специального класса \verb|XGBoostPruningCallback|
+\begin{lstlisting}[
+style = ironpython,
+numbers = none
+]
+def objective(trial):
+    ...
+	pruning_callback = optuna.integration.XGBoostPruningCallback(trial, "validation-error")
+	
+	bst = xgb.train(
+	    param,
+	    dtrain,
+	    evals=[(dvalid, "validation")],
+	    callbacks=[pruning_callback]  # <- NB
+	)
+	
+study = optuna.create_study()
+study.optimize(objective, n_trials=200)
+study.best_trial.params
+\end{lstlisting}
+
+\subsection{Сохранение и восстановление сессии исследований с помощью реляционной базы данных}
+
+Можно создать устойчивую сессию исследований следующим образом
+\begin{lstlisting}[
+style = ironpython,
+numbers = none
+]
+import logging
+import sys
+
+import optuna
+
+# Add stream handler of stdout to show the messages
+optuna.logging.get_logger("optuna").addHandler(logging.StreamHandler(sys.stdout))
+study_name = "example-study"  # Unique identifier of the study.
+storage_name = "sqlite:///{}.db".format(study_name)
+study = optuna.create_study(study_name=study_name, storage=storage_name)
+# A new study created in RDB with name: example-study
+\end{lstlisting}
+
+Пусть целевая выглядит так
+\begin{lstlisting}[
+style = ironpython,
+numbers = none
+]
+def objective(trial):
+	x = trial.suggest_float("x", -10, 10)
+	return (x - 2) ** 2
+
+study.optimize(objective, n_trials=3)
+"""
+Trial 0 finished with value: 88.4056436341533 and parameters: {'x': -7.402427539425831}. Best is trial 0 with value: 88.4056436341533.
+Trial 1 finished with value: 2.2903082473653392e-05 and parameters: {'x': 1.9952142834942244}. Best is trial 1 with value: 2.2903082473653392e-05.
+Trial 2 finished with value: 0.8965355981899926 and parameters: {'x': 1.0531443625398893}. Best is trial 1 with value: 2.2903082473653392e-05.
+"""
+\end{lstlisting}
+
+Восстановить сессию можно так
+\begin{lstlisting}[
+style = ironpython,
+numbers = none
+]
+study = optuna.create_study(study_name=study_name, storage=storage_name, load_if_exists=True)
+study.optimize(objective, n_trials=3)
+"""
+Using an existing study with name 'example-study' instead of creating a new one.
+Trial 3 finished with value: 55.80972760725184 and parameters: {'x': -5.47059084726582}. Best is trial 1 with value: 2.2903082473653392e-05.
+Trial 4 finished with value: 8.031129355496931 and parameters: {'x': -0.8339247265050869}. Best is trial 1 with value: 2.2903082473653392e-05.
+Trial 5 finished with value: 49.229175309978025 and parameters: {'x': 9.016350569204622}. Best is trial 1 with value: 2.2903082473653392e-05.
+"""
+\end{lstlisting}
+
+Изучить наполнение базы данных можно так
+\begin{lstlisting}[
+style = ironpython,
+numbers = none
+]
+import sqlite3
+
+conn = sqlite3.connect("./example-study.db")
+cur = conn.cursor()
+
+cur.execute("SELECT name FROM sqlite_master WHERE type='table';")  # <sqlite3.Cursor at 0x7f289382be30>
+print(cur.fetchall())
+"""
+[('studies',),
+('version_info',),
+('study_directions',),
+('study_user_attributes',),
+('study_system_attributes',),
+('trials',),
+('trial_user_attributes',),
+('trial_system_attributes',),
+('trial_params',),
+('trial_values',),
+('trial_intermediate_values',),
+('trial_heartbeats',),
+('alembic_version',)]
+"""
+cur.execute("SELECT * FROM study_user_attributes;").fetchall()
+# [(1, 1, 'contributors', '["Leor Finkelberg"]')]
+\end{lstlisting}
+
+\subsection{Мульти-целевая оптимизация в Optuna}
+
+Если требуется минимизировать одную целевую функцию и максимизировать другую, то обе функции можно описать в функции \verb|objective(trial)| и возвращать кортеж значений, ассоциированных с этими фукнциями
+\begin{lstlisting}[
+style = ironpython,
+numbers = none
+]
+def objective(trial):
+    ...
+    return flops, accuracy
+    
+study = optuna.create_study(direction=["minimize", "maximize"])
+study.optimize(objective, n_trials_30, timeout=300)
+\end{lstlisting}
+
+\subsection{Пользовательские атрибуты}
+
+Пользовательские атрибуты можно добавить и в сессию исследования (study), и в запуск (trial)
+\begin{lstlisting}[
+style = ironpython,
+numbers = none
+]
+import sklearn.datasets
+import sklearn.model_selection
+import sklearn.svm
+
+import optuna
+
+
+study = optuna.create_study(storage="sqlite:///example.db")
+study.set_user_attr("contributors", ["Akiba", "Sano"])
+study.set_user_attr("dataset", "MNIST")
+\end{lstlisting}
+
+Вывести все пользовательские атрибуты можно так
+\begin{lstlisting}[
+style = ironpython,
+numbers = none
+]
+study.user_attrs
+study_summaries = optuna.get_all_study_summaries("sqlite:///example-study.db")
+study_summaries[0].user_attrs  # {"contributors": ["Akiba", "Sano"], "dataset": "MNIST"}
+\end{lstlisting}
+
+А так можно добавить пользовательские атрибуты в запуск
+\begin{lstlisting}[
+style = ironpython,
+numbers = none
+]
+def objective(trial):
+	iris = sklearn.datasets.load_iris()
+	x, y = iris.data, iris.target
+	
+	svc_c = trial.suggest_float("svc_c", 1e-10, 1e10, log=True)
+	clf = sklearn.svm.SVC(C=svc_c)
+	accuracy = sklearn.model_selection.cross_val_score(clf, x, y).mean()
+	
+	trial.set_user_attr("accuracy", accuracy)
+	
+	return 1.0 - accuracy  # return error for minimization
+
+study.optimize(objective, n_trials=1)
+
+study.trials[0].user_attrs
+\end{lstlisting}
+
+\subsection{Пользовательские семплеры}
+
+Благодаря пользовательским семплерам (алгоритмам выборки) можно:
+\begin{itemize}
+	\item экспериментировать со своими алгоритмами выборки,
+	
+	\item реализовывать алгоритмы под задачу для повышения оптимизации,
+	
+	\item оборачивать другие библиотеки оптимизации, чтобы потом их внедрить в конвейеры Optuna.
+\end{itemize}
+
+Для того чтобы создать новый семплер, нужно определить класс, наследующий от \verb|BaseSampler|. У этого базового класса три абстрактных метода: \verb|infer_relative_search_space()|, \verb|sample_relative()| и \verb|sample_independent()|.
+
+Optuna поддерживает дав типа семплирования:
+\begin{itemize}
+	\item относительное семплирование (relative sampling), которое может учитывать корреляцию параметров в запуке,
+	
+	\item независимое семплирование (independent sampling), которое семплирует параметры независимо.
+\end{itemize}
+
+Пример реализации семплера на базе метода иметации отжига
+\begin{lstlisting}[
+style = ironpython,
+numbers = none
+]
+import numpy as np
+import optuna
+
+
+class SimulatedAnnealingSampler(optuna.samplers.BaseSampler):
+	def __init__(self, temperature=100):
+		self._rng = np.random.RandomState()
+		self._temperature = temperature  # Current temperature.
+		self._current_trial = None  # Current state.
+
+	def sample_relative(self, study, trial, search_space):
+		if search_space == {}:
+			return {}
+
+		# Simulated Annealing algorithm.
+		# 1. Calculate transition probability.
+		prev_trial = study.trials[-2]
+		if self._current_trial is None or prev_trial.value <= self._current_trial.value:
+			probability = 1.0
+		else:
+			probability = np.exp(
+				(self._current_trial.value - prev_trial.value) / self._temperature
+			)
+		self._temperature *= 0.9  # Decrease temperature.
+
+		# 2. Transit the current state if the previous result is accepted.
+		if self._rng.uniform(0, 1) < probability:
+			self._current_trial = prev_trial
+
+		# 3. Sample parameters from the neighborhood of the current point.
+		# The sampled parameters will be used during the next execution of
+		# the objective function passed to the study.
+		params = {}
+		for param_name, param_distribution in search_space.items():
+			if (
+				not isinstance(param_distribution, optuna.distributions.FloatDistribution)
+				or (param_distribution.step is not None and param_distribution.step != 1)
+				or param_distribution.log
+			):
+				msg = (
+					"Only suggest_float() with `step` `None` or 1.0 and"
+					" `log` `False` is supported"
+				)
+				raise NotImplementedError(msg)
+
+			current_value = self._current_trial.params[param_name]
+			width = (param_distribution.high - param_distribution.low) * 0.1
+			neighbor_low = max(current_value - width, param_distribution.low)
+			neighbor_high = min(current_value + width, param_distribution.high)
+			params[param_name] = self._rng.uniform(neighbor_low, neighbor_high)
+
+		return params
+
+# The rest are unrelated to SA algorithm: boilerplate
+	def infer_relative_search_space(self, study, trial):
+		return optuna.samplers.intersection_search_space(study)
+
+	def sample_independent(self, study, trial, param_name, param_distribution):
+		independent_sampler = optuna.samplers.RandomSampler()
+		return independent_sampler.sample_independent(study, trial, param_name, param_distribution)
+\end{lstlisting}
+
+Использовать пользовательский семплер можно также как и встроенные семплеры
+\begin{lstlisting}[
+style = ironpython,
+numbers = none
+]
+def objective(trial):
+	x = trial.suggest_float("x", -10, 10)
+	y = trial.suggest_float("y", -5, 5)
+	return x**2 + y
+
+
+sampler = SimulatedAnnealingSampler()
+study = optuna.create_study(sampler=sampler)
+study.optimize(objective, n_trials=100)
+
+best_trial = study.best_trial
+print("Best value: ", best_trial.value)
+print("Parameters that achieve the best value: ", best_trial.params)
+\end{lstlisting}
+
+\subsection{Пользовательские пранеры}
+
+Функция \verb|create_study()| принимает необязательный аргумент, наследующий от класса \verb|BasePruner|. Пранер должен переопределить абстрактный метод \verb|prune()|, который принимает аргументы, связанные с \verb|Study| и \verb|Trial| и возвращает булево значение: \verb|True|, если запуск был остановлен и \verb|False| в противном случае.
+
+Пример
+\begin{lstlisting}[
+style = ironpython,
+numbers = none
+]
+import numpy as np
+from sklearn.datasets import load_iris
+from sklearn.model_selection import train_test_split
+from sklearn.linear_model import SGDClassifier
+
+import optuna
+from optuna.pruners import BasePruner
+from optuna.trial._state import TrialState
+
+
+class LastPlacePruner(BasePruner):
+	def __init__(self, warmup_steps, warmup_trials):
+		self._warmup_steps = warmup_steps
+		self._warmup_trials = warmup_trials
+
+	def prune(self, study: "optuna.study.Study", trial: "optuna.trial.FrozenTrial") -> bool:
+		# Get the latest score reported from this trial
+		step = trial.last_step
+
+		if step:  # trial.last_step == None when no scores have been reported yet
+			this_score = trial.intermediate_values[step]
+
+			# Get scores from other trials in the study reported at the same step
+			completed_trials = study.get_trials(deepcopy=False, states=(TrialState.COMPLETE,))
+			other_scores = [
+				t.intermediate_values[step]
+				for t in completed_trials
+				if step in t.intermediate_values
+			]
+			other_scores = sorted(other_scores)
+
+			# Prune if this trial at this step has a lower value than all completed trials
+			# at the same step. Note that steps will begin numbering at 0 in the objective
+			# function definition below.
+			if step >= self._warmup_steps and len(other_scores) > self._warmup_trials:
+				if this_score < other_scores[0]:
+					print(f"prune() True: Trial {trial.number}, Step {step}, Score {this_score}")
+					return True
+
+	return False
+\end{lstlisting}
+
+\begin{lstlisting}[
+style = ironpython,
+numbers = none
+]
+def objective(trial):
+	iris = load_iris()
+	classes = np.unique(iris.target)
+	X_train, X_valid, y_train, y_valid = train_test_split(
+		iris.data, iris.target, train_size=100, test_size=50, random_state=0
+	)
+
+	loss = trial.suggest_categorical("loss", ["hinge", "log_loss", "perceptron"])
+	alpha = trial.suggest_float("alpha", 0.00001, 0.001, log=True)
+	clf = SGDClassifier(loss=loss, alpha=alpha, random_state=0)
+	score = 0
+
+	for step in range(0, 5):
+		clf.partial_fit(X_train, y_train, classes=classes)
+		score = clf.score(X_valid, y_valid)
+		
+		trial.report(score, step)
+		
+		if trial.should_prune():
+			raise optuna.TrialPruned()
+
+	return score
+
+
+pruner = LastPlacePruner(warmup_steps=1, warmup_trials=5)
+study = optuna.create_study(direction="maximize", pruner=pruner)
+study.optimize(objective, n_trials=50)
+\end{lstlisting}
+
+\subsection{Пользовательские callbacks для метода \texttt{optimize}}
+
+Следущий класс останавливает оптимизацию, когда количество остановок запуска поряд превышает некоторый порог
+\begin{lstlisting}[
+style = ironpython,
+numbers = none
+]
+import optuna
+
+
+class StopWhenTrialKeepBeingPrunedCallback:
+	def __init__(self, threshold: int):
+		self.threshold = threshold
+		self._consequtive_pruned_count = 0
+
+	def __call__(self, study: optuna.study.Study, trial: optuna.trial.FrozenTrial) -> None:
+	if trial.state == optuna.trial.TrialState.PRUNED:
+		self._consequtive_pruned_count += 1
+	else:
+		self._consequtive_pruned_count = 0
+
+	if self._consequtive_pruned_count >= self.threshold:
+		study.stop()
+\end{lstlisting}
+
+Целевая устроена так, чтобы запуски останавливались подряд после 5 итераций
+\begin{lstlisting}[
+style = ironpython,
+numbers = none
+]
+def objective(trial):
+	if trial.number > 4:
+		raise optuna.TrialPruned
+
+	return trial.suggest_float("x", 0, 1)
+\end{lstlisting}
+
+И запуск
+\begin{lstlisting}[
+style = ironpython,
+numbers = none
+]
+import logging
+import sys
+
+# Add stream handler of stdout to show the messages
+optuna.logging.get_logger("optuna").addHandler(logging.StreamHandler(sys.stdout))
+
+study_stop_cb = StopWhenTrialKeepBeingPrunedCallback(2)
+study = optuna.create_study()
+study.optimize(objective, n_trials=10, callbacks=[study_stop_cb])
+\end{lstlisting}
+
+\subsection{Ask-and-Tell Interface}
+
+Варианта с функцией \verb|objective| часто оказывается достаточно, но все-таки у него есть ограничения. Более гибкий вариант можно построить так
+\begin{lstlisting}[
+style = ironpython,
+numbers = none
+]
+study = optuna.create_study(direction="maximize")
+
+n_trials = 10
+for _ in range(n_trials):
+	trial = study.ask()  # `trial` is a `Trial` and not a `FrozenTrial`.
+	
+	C = trial.suggest_float("C", 1e-7, 10.0, log=True)
+	solver = trial.suggest_categorical("solver", ("lbfgs", "saga"))
+	
+	clf = LogisticRegression(C=C, solver=solver)
+	clf.fit(X_train, y_train)
+	val_accuracy = clf.score(X_test, y_test)
+
+study.tell(trial, val_accuracy)  # tell the pair of trial and objective value
+\end{lstlisting}
+
+\verb|optuna.study.Study.ask()| создает запуск (триал), чтобы можно было семплировать гиперпараметры, а \verb|optuna.study.Study.tell()| завершает триал. Таким образом можно подбирать гиперпараметры без функции \verb|objective|.
+
+Если требуется сделать оптимзиацию более быстрой, то нужно явно передать экземпляр пранера
+\begin{lstlisting}[
+style = ironpython,
+numbers = none
+]
+import numpy as np
+from sklearn.datasets import load_iris
+from sklearn.linear_model import SGDClassifier
+from sklearn.model_selection import train_test_split
+
+import optuna
+
+
+X, y = load_iris(return_X_y=True)
+X_train, X_valid, y_train, y_valid = train_test_split(X, y)
+classes = np.unique(y)
+n_train_iter = 100
+
+# define study with hyperband pruner.
+study = optuna.create_study(
+	direction="maximize",
+	pruner=optuna.pruners.HyperbandPruner(
+		min_resource=1, max_resource=n_train_iter, reduction_factor=3
+	),
+)
+
+for _ in range(20):
+	trial = study.ask()
+	
+	alpha = trial.suggest_float("alpha", 0.0, 1.0)
+	
+	clf = SGDClassifier(alpha=alpha)
+	pruned_trial = False
+
+	for step in range(n_train_iter):
+		clf.partial_fit(X_train, y_train, classes=classes)
+		
+		intermediate_value = clf.score(X_valid, y_valid)
+		trial.report(intermediate_value, step)
+		
+		if trial.should_prune():
+		pruned_trial = True
+		break
+
+	if pruned_trial:
+		study.tell(trial, state=optuna.trial.TrialState.PRUNED)  # tell the pruned state
+	else:
+		score = clf.score(X_valid, y_valid)
+		study.tell(trial, score)  # tell objective value
+\end{lstlisting}
+
+\subsection{Define-and-Run}
+
+Еще можно сначала описать распределения гиперпараметров, а потом вызвать
+
+ \verb|optuna.study.Study.ask()| 
+\begin{lstlisting}[
+style = ironpython,
+numbers = none
+]
+distributions = {
+    "C": optuna.distributions.FloatDistribution(1e-7, 10.0, log=True)
+    "solver": optuna.distributions.CategoricalDistribution(("lbfgs", "saga")),
+}
+
+study = optuna.create_study(direction="maximize")
+n_trials = 10
+
+for _ in range(n_trials):
+    trial = study.ask(distributions)
+    
+    C = trial.params["C"]
+    solver = trial.params["solver"]
+    
+    clf = LogisticRegression(C=C, solver=solver)
+    clf.fit(X_train, y_train)
+    val_accuracy = clf.score(X_test, y_test)
+    
+    study.tell(trial, val_accuracy)
+\end{lstlisting}
+
+\subsection{Пакетная оптимизация}
+
+Для ускорения оптимизации можно передавать массивы 
+\begin{lstlisting}[
+style = ironpython,
+numbers = none
+]
+def batched_objective(xs: np.ndarray, ys: np.ndarray):
+	return xs**2 + ys
+
+batch_size = 10
+study = optuna.create_study(sampler=optuna.samplers.CmaEsSampler())
+
+for _ in range(3):
+
+	# create batch
+	trial_numbers = []
+	x_batch = []
+	y_batch = []
+	for _ in range(batch_size):
+		trial = study.ask()
+		trial_numbers.append(trial.number)
+		x_batch.append(trial.suggest_float("x", -10, 10))
+		y_batch.append(trial.suggest_float("y", -10, 10))
+	
+	# evaluate batched objective
+	x_batch = np.array(x_batch)
+	y_batch = np.array(y_batch)
+	objectives = batched_objective(x_batch, y_batch)
+
+	# finish all trials in the batch
+	for trial_number, objective in zip(trial_numbers, objectives):
+		study.tell(trial_number, objective)
+\end{lstlisting}
+
+\subsection{Переиспользование лучшего запуска}
+
+Пусть есть гиперпараметры, подобранные на некотором фрагменте обучающего набора (для снижения вычислительной нагрузки), и теперь требуется обучить модель на полном обучающем наборе данных с использованием лучшей комбинации гиперпараметров.
+
+\verb|best_trial| предлагает интерфейс для повторного вычисления целевой функции с текущим лучшим набором гиперпараметров и возвращает объект \verb|FrozenTrial|.
+
+\subsection{Создание целевой функции с дополнительными аргументами}
+
+Если нужно передать в целевую функцию что-то еще кроме \verb|trial|, то можно:
+\begin{enumerate}
+	\item Написать свой класс 
+\begin{lstlisting}[
+style = ironpython,
+numbers = none
+]
+import optuna
+
+
+class Objective:
+	def __init__(self, min_x, max_x):
+		# Hold this implementation specific arguments as the fields of the class.
+		self.min_x = min_x
+		self.max_x = max_x
+
+	def __call__(self, trial):
+		# Calculate an objective value by using the extra arguments.
+		x = trial.suggest_float("x", self.min_x, self.max_x)
+		return (x - 2) ** 2
+
+
+# Execute an optimization by using an `Objective` instance.
+study = optuna.create_study()
+study.optimize(Objective(-100, 100), n_trials=100)
+\end{lstlisting}
+
+    \item Использовать замыкания
+\begin{lstlisting}[
+style = ironpython,
+numbers = none
+]
+import optuna
+
+# Objective function that takes three arguments.
+def objective(trial, min_x, max_x):
+	x = trial.suggest_float("x", min_x, max_x)
+	return (x - 2) ** 2
+
+
+# Extra arguments.
+min_x = -100
+max_x = 100
+
+# Execute an optimization by using the above objective function wrapped by `lambda`.
+study = optuna.create_study()
+study.optimize(lambda trial: objective(trial, min_x, max_x), n_trials=100)
+\end{lstlisting}
+\end{enumerate}
+
+Чтобы \emph{переиспользовать} набор данных, а не загружать его для каждого триала можно передать ссылку на набор данных при создании экземпляра класса целевой функции \url{https://github.com/optuna/optuna-examples/blob/main/sklearn/sklearn_additional_args.py}
+\begin{lstlisting}[
+style = ironpython,
+numbers = none
+]
+"""
+It takes the Iris dataset by a constructor's argument
+instead of loading it in each trial execution. This will speed up the execution of each trial
+compared to `sklearn_simple.py`.
+"""
+
+import optuna
+
+import sklearn.datasets
+import sklearn.ensemble
+import sklearn.model_selection
+import sklearn.svm
+
+
+class Objective(object):
+	def __init__(self, iris):
+		self.iris = iris
+
+	def __call__(self, trial):
+		x, y = self.iris.data, self.iris.target
+
+		classifier_name = trial.suggest_categorical("classifier", ["SVC", "RandomForest"])
+		if classifier_name == "SVC":
+			svc_c = trial.suggest_float("svc_c", 1e-10, 1e10, log=True)
+			classifier_obj = sklearn.svm.SVC(C=svc_c, gamma="auto")
+		else:
+			rf_max_depth = trial.suggest_int("rf_max_depth", 2, 32, log=True)
+			classifier_obj = sklearn.ensemble.RandomForestClassifier(
+				max_depth=rf_max_depth, n_estimators=10
+			)
+
+		score = sklearn.model_selection.cross_val_score(classifier_obj, x, y, n_jobs=-1, cv=3)
+		accuracy = score.mean()
+		return accuracy
+
+
+if __name__ == "__main__":
+	# Load the dataset in advance for reusing it each trial execution.
+	iris = sklearn.datasets.load_iris()
+	objective = Objective(iris)
+
+	study = optuna.create_study(direction="maximize")
+	study.optimize(objective, n_trials=100)
+	print(study.best_trial)
+\end{lstlisting}
+
+В этом примере роль функции \verb|objective| играет метод \verb|__call__()|. Обязательно у метода должен быть параметр \verb|trial|.
+
+\subsection{Optuna можно использовать и без RDB-серверов}
+
+В простейшем случае Optuna работает в оперативной памяти (in-memory storage)
+\begin{lstlisting}[
+style = ironpython,
+numbers = none
+]
+study = optuna.create_study()
+study.optimize(objective)
+\end{lstlisting}
+
+Если нужно сохранять информацию по сессиям исследований, то можно воспользоваться SQlite в качестве локального хранилища
+\begin{lstlisting}[
+style = ironpython,
+numbers = none
+]
+study = optuna.create_study(study_name="foo_study", storage="sqlite:///example.db")
+study.optimize(objective)  # # The state of `study` will be persisted to the local SQLite file.
+\end{lstlisting}
+
+В простейшем случае, когда используется хранилище в памяти, можно просто сохранить объект сессии исследований (\verb|study|) с помощью \verb|pickle| или \verb|joblib|
+\begin{lstlisting}[
+style = ironpython,
+numbers = none
+]
+study = optuna.create_study()
+joblib.dump(study, "study.pkl")
+\end{lstlisting}
+
+А затем восстановить
+\begin{lstlisting}[
+style = ironpython,
+numbers = none
+]
+study = joblib.load("study.pkl")
+study.best_trial.value
+study.best_trial.params
+\end{lstlisting}
+
+ВАЖНО: Optuna не поддерживает сохранение/загрузку в разных версиях Optuna с \verb|pickle|. Если требуется сохранять/восстанавливать сессии исследований в различных версиях Optuna, то следует использовать СУБД и обновить схему хранилища, если требуется.
+
+\subsection{Как сохранить модель машинного обучения, обученную в функции \texttt{objective}}
+
+Optuna сохраняет значения гиперпараметров, но не сохраняет модели машинного обучения или веса нейронных сетей. Чтобы сохранить модель, следует воспользоваться средствами используемой библиотеки машинного обучения. Рекомендуется сохранять номер запуска
+
+\verb|optuna.trial.Trial.number|
+\begin{lstlisting}[
+style = ironpython,
+numbers = none
+]
+def objective(trial):
+	svc_c = trial.suggest_float("svc_c", 1e-10, 1e10, log=True)
+	clf = sklearn.svm.SVC(C=svc_c)
+	clf.fit(X_train, y_train)
+	
+	# Save a trained model to a file.
+	with open("{}.pickle".format(trial.number), "wb") as fout:
+		pickle.dump(clf, fout)
+	return 1.0 - accuracy_score(y_valid, clf.predict(X_valid))
+
+
+study = optuna.create_study()
+study.optimize(objective, n_trials=100)
+
+# Load the best model.
+with open("{}.pickle".format(study.best_trial.number), "rb") as fin:
+	best_clf = pickle.load(fin)
+print(accuracy_score(y_valid, best_clf.predict(X_valid)))
+\end{lstlisting}
+
+Чтобы получить воспроизводимые результаты следует зафиксировать ключ генератора псевдо-случайных чисел \verb|seed| семплера
+\begin{lstlisting}[
+style = ironpython,
+numbers = none
+]
+sampler = TPESampler(seed=10)  # Make the sampler behave in a deterministic way.
+study = optuna.create_study(sampler=sampler)
+study.optimize(objective)
+\end{lstlisting}
+
+Однако, следует иметь ввиду, что в распределенном или параллельном режиме очень сложно получить воспроизводимые результаты, поэтому если нужно получить строго воспроизводимые результаты, то следует запускать исследования последовательно.
+
+\subsection{Как можно тестировать целевые функции}
+
+Для того чтобы целевая функция возвращала одни и те же значения, можно вызывать целевую функцию \verb|objective| со словарем параметров, обернутым классом \verb|FixedTrial|
+\begin{lstlisting}[
+style = ironpython,
+numbers = none
+]
+# A test function of pytest
+def test_objective():
+	assert 1.0 == objective(FixedTrial({"x": 1.0, "y": 0}))
+	assert -1.0 == objective(FixedTrial({"x": 0.0, "y": -1}))
+	assert 0.0 == objective(FixedTrial({"x": -1.0, "y": 1}))
+\end{lstlisting}
+
+Если во время выполнения большого числа запусков ощущается нехватка памяти, то можно попробывать периодически запускать сборщик мусора \verb|gc_after_trial|
+\begin{lstlisting}[
+style = ironpython,
+numbers = none
+]
+def objective(trial):
+	x = trial.suggest_float("x", -1.0, 1.0)
+	y = trial.suggest_int("y", -5, 5)
+	return x + y
+
+
+study = optuna.create_study()
+study.optimize(objective, n_trials=10, gc_after_trial=True)
+
+# `gc_after_trial=True` is more or less identical to the following.
+study.optimize(objective, n_trials=10, callbacks=[lambda study, trial: gc.collect()])
+\end{lstlisting}
+
+ВАЖНО: Optuna поддерживает только <<мягкие>> ограничения (то есть ограничение можно нарушить, но целевая будет штрафовать за такое нарушение).
+
+
+
+
 
 \section{Приемы работы с AutoML-библиотекой FLAML}
 
