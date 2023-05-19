@@ -41,6 +41,8 @@ pip install xgboost
 
 \subsection{Вводные замечания}
 
+XGBoost пытается строить \emph{полные бинарные} деревья \emph{в глубину} (\href{https://lightgbm.readthedocs.io/en/latest/Experiments.html}{depth/level-wise}), а LightGBM строит деревья \emph{по листьям} (leaf-wise) (\emph{несиммертичные} деревья) с ограничением числа терминальных узлов (\verb|num_leaves|).
+
 Целевая функция в градиентном бустинге -- это \emph{потери на обучающем наборе данных} + \emph{регуляризация}
 \begin{align*}
 	obj  = L(\theta) + \Omega (\theta),
@@ -1121,6 +1123,435 @@ if __name__ == "__main__":
 
 \section{LightGBM}
 
+\subsection{Установка}
+
+Установить библиотеку можно с помощью менеджера пакетов \verb|pip|
+\begin{lstlisting}[
+style = ironpython,
+numbers = none
+]
+pip install lightgbm
+\end{lstlisting}
+
+\subsection{Быстрый старт}
+
+\subsubsection{Работа с входными данными}
+
+LightGBM поддерживает входные данные в форматах CSV, TSV, LibSVM, NumPy 2D массивы, pandas DataFrame, H2O DataTable's Frame, SciPy sparse matrix, LightGBM binary file, LightGBM Sequence objects.
+
+Данные хранятся в \verb|Dataset| объектах
+\begin{lstlisting}[
+style = ironpython,
+numbers = none
+]
+dtrain = lgb.Dataset(X_train, y_train)
+dtrain.data  # вернет X_train
+dtrain.label  # или dtrain.get_label() вернет y_train
+\end{lstlisting}
+
+Сохранить набор данных можно так
+\begin{lstlisting}[
+style = ironpython,
+numbers = none
+]
+dtrain.save_binary("regression.train.from_hdf.bin")
+\end{lstlisting}
+
+Сохранение набора данных в бинарном формате LightGBM делает загрузку более быстрой
+\begin{lstlisting}[
+style = ironpython,
+numbers = none
+]
+train_data = lgb.Dataset("train.svm.txt")
+train_data.save_binary("train.bin")
+\end{lstlisting}
+
+LightGBM может работать с категориальными признаками напрямую (без OHE). Поддерживаются веса экземпляров (но нужно назначить эти веса). 
+
+Для чтения бинарных файлов можно реализовать Sequence-интерфейс
+\begin{lstlisting}[
+style = ironpython,
+numbers = none
+]
+import h5py
+
+class HDFSequence(lgb.Sequence):
+    def __init__(self, hdf_dataset, batch_size):
+        self.data = hdf_dataset
+        self.batch_size = batch_size
+        
+    def __getitem__(self, idx):
+        return self.data[idx]
+        
+    def __len__(self):
+        return len(self.data)
+        
+f = h5py.File("train.hdf5", "r")
+train_data = lgb.Dataset(HDFSequence(f["X"], 8192), label=f["Y"][:])
+\end{lstlisting}
+
+Особенности использования Sequence-интерйеса:
+\begin{itemize}
+	\item Выборка данных выполняется случайно и потому не требуется полный проход через весь набор,
+	
+	\item Данные читаются пакетами, что экономит память при конструировании \verb|Dataset|,
+	
+	\item Поддерживает создание \verb|Dataset| из нескольких файлов.
+\end{itemize}
+
+\subsubsection{Поддержка категориальных признаков}
+
+В документации LightGBM утверждается, что пакет умеет работать с категориальными признаками на прямую, без необходимости их конвертировать с помощью OHE. При этом перед построением \verb|Dataset| требуется категориальные фичи привести к целочисленному типу (как и в XGBoost)
+\begin{lstlisting}[
+style = ironpython,
+numbers = none
+]
+X_train["color"] = X_train["color"].astype("category")
+dtrain = lgb.Dataset(X_train, y_train)
+\end{lstlisting}
+
+{\color{red}ВАЖНО: при создании \verb|Dataset| LightGBM не проверяет корректность данных, а XGBoost проверяет, то есть XGBoost просто не позволит создать экземпляр матрицы данных, в которой есть нарушение типа категорильаного признака, используются не существующие имена признаков и пр., а LightGBM заговорит о нарушениях только на этапе обучения модели}
+
+Если при создании экземпляра \verb|Dataset| не передавать параметру \verb|feature_name| список значений, то есть если \verb|feature_name="auto"| и матрица признакового описания это pandas-DataFrame, то имена столбцов будут извлекаться из атрибута \verb|columns|. 
+
+Если параметру \verb|categorical_features| передать списко целых чисел, то он будет интерпретироваться как список индексов категориальных признаков А если как список строк (имен столбцов), то нужно будет еще параметру \verb|feature_name| передать список имен столбцов
+\begin{lstlisting}[
+style = ironpython,
+numbers = none
+]
+lgb.Dataset(
+    X_train,
+    y_train,
+    # перечислить нужно имена всех признаков
+    feature_name=["col1", "col2", "col3", "color"],
+    categorical_feature=["color"]
+)
+\end{lstlisting}
+
+\subsubsection{Эффективное использование памяти}
+
+Объект \verb|Dataset| в LightGBM имеет очень эффективную по памяти реализацию, ему нужно только сохранить бины. Однако, numpy/array/pandas объекты требуют больших затрат памяти. Снизить потребление памяти можно так
+\begin{itemize}
+	\item При создании \verb|Dataset| выставить \verb|free_raw_data=True|,
+	
+	\item После создания \verb|Dataset| явно указать \verb|raw_data=None|,
+	
+	\item Вызвать \verb|gc|.
+\end{itemize}
+
+\subsubsection{Настройка параметров}
+
+LightGBM для настройки параметров может использовать словарь
+\begin{lstlisting}[
+style = ironpython,
+numbers = none
+]
+params = {"num_leaves": 31, "objective": "binary"}
+params["metirc"] = "auc"  # ["auc", "binary_logloss"]
+\end{lstlisting}
+
+\subsubsection{Обучение}
+
+Обучение модели
+\begin{lstlisting}[
+style = ironpython,
+numbers = none
+]
+num_round = 100
+
+bst = lgb.train(
+    params,
+    dtrain,
+    num_round,
+    valid_sets=[dval]
+)
+\end{lstlisting}
+
+Сохранить обученную модель можно так
+\begin{lstlisting}[
+style = ironpython,
+numbers = none
+]
+bst.save_model("model.txt")
+\end{lstlisting}
+
+Еще можно обученную модель представить в виде словаря 
+\begin{lstlisting}[
+style = ironpython,
+numbers = none
+]
+print(bst.dump_load())
+"""
+{'name': 'tree',
+	'version': 'v3',
+	'num_class': 1,
+	'num_tree_per_iteration': 1,
+	'label_index': 0,
+	'max_feature_idx': 3,
+	'objective': 'regression',
+	'average_output': False,
+	'feature_names': ['col1', 'col2', 'col3', 'color'],
+	'monotone_constraints': [],
+	'feature_infos': {'color': {'min_value': -1,
+			'max_value': 2,
+			'values': [-1, 2, 0, 1]}},
+	'tree_info': [{'tree_index': 0,
+		'num_leaves': 1,
+		'num_cat': 0,
+		'shrinkage': 1,
+		'tree_structure': {'leaf_value': 0.6}}],
+	'feature_importances': {},
+	'pandas_categorical': [['blue', 'green', 'red']]}
+"""
+\end{lstlisting}
+
+В XGBoost метод \verb|dump_model()| рекомендуется использовать только для визуализации и местного изучения структуры модели. Для длительного хранения модель нужно сохранять с помощью метода \verb|save_model| в форматах json или ubj. И в XGBoost метод \verb|dump_model| сохраняет объект обученной модели в файл, а в LightGBM этот метод просто возвращает модель в виде словаря.
+
+Сохраненную модель в LightGBM можно загрузить в бустер-пустышку
+\begin{lstlisting}[
+style = ironpython,
+numbers = none
+]
+# Нельзя создать экземпляр бустера без указания пути до модели
+bst = bst.Booster(model_file="model.txt")
+\end{lstlisting}
+
+А в XGBoost можно создать пустой бустер, а затем загрузить в него модель
+\begin{lstlisting}[
+style = ironpython,
+numbers = none
+]
+bst = xgb.Booster()
+bst.load_model("./simple_xgb.ubj")
+
+# а можно сразу указать путь до модели
+bst = xgb.Booster(model_file="./simple_xgb.ubj")
+\end{lstlisting}
+
+Можно обучаться с помощью перекрестной проверки
+\begin{lstlisting}[
+style = ironpython,
+numbers = none
+]
+lgb.cv(params, dtrain, num_round, nfold=5)
+\end{lstlisting}
+
+\subsubsection{Ранняя остановка}
+
+Если есть валидационный набор данных, то подобрать оптимальное число итераций градиентного бустинга с помощью ранней остановки. Рання остановка требует хотя бы одного набора данных в \verb|valid_sets|. Если их больше одного, то будут использоваться все кроме обчающего поднабора.
+\begin{lstlisting}[
+style = ironpython,
+numbers = none
+]
+bst = lgb.train(
+    params,
+    dtrain,
+    valid_sets=[dval],
+    callbacks=[lgb.early_stopping(stopping_rounds=5)]
+)
+
+bst.save_model("model.txt", num_iteration=bst.best_iteration)
+\end{lstlisting}
+
+Модель будет обучаться до тех пор, пока оценка на валидационном поднаборе не перестанет улучшаться. Оценка на валидационном поднаборе должна улучшаться по крайней мере каждые \verb|stopping_rounds| для продолжения обучения.
+
+В LightGBM \verb|train()| возвращает модель лучшей итерации, а в XGBoost -- последней (не лучшей!).
+
+Это работает и с ошибками (L2, log loss etc.), и с метриками (NDCG, AUC etc.). Если указать более одной оценки (метрики или ошибки), то все эти оценки будут использоваться для ранней остановки. Если нужно, чтобы использовалась только первая оценка, то можно выставить \verb|first_metric_only=True| в callback \verb|early_stopping|.
+
+\subsubsection{Прогноз}
+
+Обученная или загруженная модель может использоваться для построения прогноза
+\begin{lstlisting}[
+style = ironpython,
+numbers = none
+]
+data = np.random.rand(7, 10)
+ypred = bst.predict(data)
+\end{lstlisting}
+
+В <<быстром страте>> говорится, что если использовалась ранняя остановка, то прогноз для лучшей итерации можно получить так
+\begin{lstlisting}[
+style = ironpython,
+numbers = none
+]
+ypred = bst.predict(data, num_iteration=bst.best_iteration)
+\end{lstlisting}
+
+Но в документации LightGBM говорится, что если \verb|num_iteration=None| (по умолчанию), лучшая итерация существует и \verb|start_iteration| $ \leqslant 0 $, то будет использоваться \emph{лучшая итерация}. То есть можно просто использовать \verb|bst.predict(X_test)|.
+
+В XGBoost вот так
+\begin{lstlisting}[
+style = ironpython,
+numbers = none
+]
+ypred = bst.predict(dtest, iteration_range=(0, bst.best_iteration + 1))
+\end{lstlisting}
+
+В XGBoost действительно всегда нужно указывать диапазон итераций, если на фазе обучения число итераций градиентного бустинга определяется с помощью ранней остановки.
+
+\subsection{Особенности реализации LightGBM}
+
+LIghtGBM использует алгоритмы, основанные на гистограммах (histogram-based algorithms), которые распределяют вещественные принаки (атрибуты) по бинам. Это повышает скорость обучения и снижает потребление памяти.
+
+Преимущества \emph{гистограммных алгоритмов} в следующем:
+\begin{itemize}
+	\item Снижает издержки на вычисление информационного прироста для каждого разбиения:
+	\begin{itemize}
+		\item Pre-sort-based algorithms имеют временную сложность $ O(\#data) $,
+		
+		\item У операции построения гистограммы такая же временная сложность -- $ O(\#data) $, но когда гистограмма будет построена, временная сложность гистограммного алгоритма будет $ O(\#bins) $, а $ \#bins $ значительно меньше $ \#data $.
+	\end{itemize}
+
+    \item Использует разность гистограмм для ускорения:
+    \begin{itemize}
+    	\item Для получения гистограмм одного листа бинарного дерева, использует разность родительской и соседней гистограмм,
+    \end{itemize}
+
+    \item Снижает потребление памяти:
+    \begin{itemize}
+    	\item Заменяет непрерывные значения дискретными бинами. Если число $ \#bins $ маленькое,то можно использовать соответвствующие типы данных (например, \verb|uint8|) для сохранения обучающего набора,
+    	
+    	\item не требуется сохранять дополнительную информацию о предварительно отсортированных признаках.
+    \end{itemize}
+
+    \item Снижает коммуникационные издержки для распределенного обучения.
+\end{itemize}
+
+\subsection{Стратегия выращения деревьев в LightGBM}
+
+Как отмечается в документации LightGBM, большинство алгоритмов построения деревьев строят деревья \emph{в глубину}, \emph{по уровням} (level-wise или depth-wise) \pic{fig:level_wise}. То есть другими словами дерево строится так, чтобы был заполнен каждый уровень.
+
+\begin{figure}[h]
+	\centering
+	\includegraphics[scale=1.0]{figures/level_wise.png}
+	\caption{ Стратегия выращивания деревьев в глубину (level-wise) }\label{fig:level_wise}
+\end{figure}
+
+LightGBM строит деревья \emph{по листьям} (leaf-wise или best-first) \pic{fig:lgb_leaf_wise} с ограничением на число терминальных узлов. Это приводит к тому, что деревья получаются \emph{несиммертичными}: одно поддерево может иметь глубину 2, а другое -- глубину 15. Выращивание деревьев по листьям может стать причиной переобучения, когда обучающих экземпляров $ \#data $ мало, поэтому LightGBM ограничивает еще и глубину дерева (\verb|max_depth|).
+
+\begin{figure}[h]
+	\centering
+	\includegraphics[scale=1.0]{figures/lgb_leaf_wise.png}
+	\caption{ Стратегия LightGBM выращивания деревьев в глубину (level-wise). Получаются несиммертичные деревья }\label{fig:lgb_leaf_wise}
+\end{figure}
+
+\subsection{Оптимальное разбиение для категориальных признаков}
+
+Обычно категориальные признаки представляют с помощью техники одного активного состояния (OHE), но этот подход неоптимален для <<деревянных>> моделей. Особенно для высоко кардинальных категориальных признаков дерево, построенное на признаках, закодированных с помощью OHE, должно быть \emph{очень глубоким}.
+
+LightGBM сортирует гистограмму (для категориального признака) согласно накопленному значению \verb|sum_gradient / sum_hessian| и затем ищет лучшее разбиение по этой отсортированной гистограмме. Если я правильно понял, то они просто собирают категории в $ k $ групп и для каждой группы вычисляют отношение суммы градиентов к сумме гессианов, а затем сортируют группы по этой оценке и рассматривают $ k - 1 $ вариантов разбиения. 
+
+\subsection{Расспараллеливание}
+
+\emph{Традиционный алгоритм} поиска лучшего разбиения в дереве:
+\begin{itemize}
+	\item Матрица признакового описания объекта разбивается вертикально, то есть каждая машина получает свой поднабор признаков,
+	
+	\item Воркер ищет лучшую локальную точку разбиения (то есть пару <<признак--порог>>) на своем локальном подмножестве признаков,
+	
+	\item Из этих локальных лучших пар <<признак--порог>> выбирается лучшая пара,
+	
+	\item Воркер с лучшим разбиением делает разбиение, а затем отправляет другим воркерам результат разбиения данных,
+	
+	\item Другие воркеры разбивают данные в соответсвие с полученными данными.
+\end{itemize}
+
+Распараллеливание по признакам не может значительно повысить производительность, когда данных много, поэтому LightGBM предлагает вместо разбиения набора данных вертикально передавать \emph{полный набор} данных каждому воркеру. В этом случае снимаются накладные расходы на коммуникацию, так как каждый воркер знает как разбить данные.
+
+Однако, остаются вычислительные издержки, когда данных много. Предлагается распараллеливать по данным.
+
+\emph{Традиционный алгоритм} распараллеливания по данным:
+\begin{itemize}
+	\item Данные разбиваются горизонтально,
+	
+	\item Воркеры используют локальные поднаборы для построения локальных гистограмм,
+	
+	\item Локальные гистограммы сливаются в глобальную,
+	
+	\item Ищется лучшее разбиение на <<склееной>> глобальной гистограмме.
+\end{itemize}
+
+Недостаток: высокие издержки на коммуникацию.
+\vspace{3mm}
+
+LightGBM распараллеливает по данным так. Вместо объединения локальных гистограмм в одну глобальную гистограмму, LightGBM использует <<Reduce Scatter>> для объединения гистограмм различных неперекрывающихся признаков различных воркеров. Временная сложность $ O(0.5 \cdot \#features \cdot \#bins) $.
+
+\subsection{Параметры}
+
+\verb|force_col_wise|: используется только на CPU; \verb|force_col_wise=True| для принудительного поколоночного построения гистограммы; рекомендуется использовать, когда 
+\begin{itemize}
+	\item много признаков или бинов,
+	
+	\item используется много потоков \verb|num_threads| > 20,
+	
+	\item требуется снизить потребление памяти.
+\end{itemize}
+
+ВАЖНО: когда и \verb|force_col_wise=False| и \verb|force_row_wise=False|, LightGBM пробует оба эти параметра, а затем выбирает более быстрый. Чтобы не тратить время на тестирование вариантов, можно в ручную выбрать более быстры и его выставить в \verb|True|. Использовать можно только один из этих параметров.
+
+\verb|force_row_wise|: используется только на CPU, \verb|force_row_wise=True| для принудительного построкового построения гистограммы; рекомендуется использовать, когда
+\begin{itemize}
+	\item много точек данных и общее количество бинов невелико,
+	
+	\item \verb|num_threads| относительно невелико ($ \leqslant 16 $),
+	
+	\item требуется использовать низкие значения \verb|bagging_fraction| или \verb|goss| стратегию выборки для ускорения.
+\end{itemize}
+
+ВАЖНО: если выставить \verb|force_row_wise| в \verb|True|, потребление памяти \verb|Dataset| удвоится. Если памяти недостаточно, то можно попробовать выставить \verb|force_col_wise| в \verb|True|.
+
+\verb|min_data_in_leaf| (default = 20): минимальное число экземпляров в листе; может использоваться для борьбы с переобучением.
+
+\verb|min_sum_hessian_in_leaf|: минимальная сумма гессианов в листе; так же как и \verb|min_data_in_leaf| может применяться для борьбы с переобучением.
+
+\verb|bagging_fraction|: доля случайно выбранных экземпляров обучающего набора; может применяться для сокращения временных издержек на фазе обучения модели, а также для борьбы с переобучением; требуется установить ненулевое значение для параметра \verb|bagging_freq|.
+
+\verb|pos_bagging_fraction|: используется только в задачах бинарной классификации; может быть полезен для несбалансированных задач; выбирает \verb|#pos_samples * pos_bagging_fraction| положительных экземпляров; должен использоваться вместе с \verb|neg_bagging_fraction|; чтобы использовать \verb|pos_bagging_fraction| нужно выставить еще \verb|bagging_freq| и \verb|neg_bagging_freq|.
+
+\verb|bagging_freq|: частота беггинга; \verb|k| означает, что беггинг выполняется на каждой $ k $-ой итерации. То есть LightGBM на каждой $ k $-ой итерации случайно выбирает \verb|bagging_fraction * 100 %| от обучающего набора данных для следующих $ k $ итераций.
+
+\verb|feature_fraction|: LightGBM на каждой итерации (то есть каждого дерева) будет случайно отбирать указанную долю признаков, если \verb|feature_fraction| < 1.0; может использоваться для снижения временных издержек на фазе обучения модели, а также для борьбы с переобучением.
+
+\verb|feature_fraction_bynode|: LightGBM будет случайно выбирать указанную долю признаков в каждом узле дерева, если \verb|feature_fraction_bynode| < 1.0.
+
+\verb|lambda_l1|: $ L_1 $-регуляризация.
+
+\verb|lambda_l2|: $ L_2 $-регуляризация.
+
+\verb|two_round|: рекомендуется выставить этот параметр в \verb|True|, если набор данных слишком большой для обучения в памяти; по умолчанию LightGBM отображает данные на память и загружает признаки из памяти; это значительно ускоряет загрузку, но может привести ошибкам памяти, если набор слишком большой; работает только, если данные загружаются напрямую из текстового файла.
+
+\verb|predict_contrib|: если выставить в \verb|True|, то вернутся значения по Шепли, представляющие влкад каждого признака в прогноз.
+
+\verb|is_unbalanced|: используется только в задачах \emph{бинарной} и \emph{многоклассовой классификации по схеме One-vs-All} (или что то же самое One-vs-Rest); если обучающий набор данных \emph{несбалансирован}, то нужно выставить в \verb|True|; этот параметр нельзя использовать одновременно с параметром \verb|scale_pos_weight|; нужно выбрать что-то одно.
+
+\url{https://en.wikipedia.org/wiki/Multiclass_classification#One-vs.-rest} One-vs-Rest (или One-vs-All) -- это стратегия, идея которой состоит в том, чтобы один класс (положительный) был противопостовлен остальным классам, которые <<сливаются>> в единый отрицательный класс. Каждый класс из нескольких должен побывать на месте положительного класса, противопоставленного отрицательному классу, состоящему из остальных классов. Эта стратегия требует, чтобы базовые классификаторы выдавали реальный показатель достоверности своего решения, а не просто метку класса. При построении прогноза к новому тестовому экземпляру $ x $ применяются все обученные классификаторы и прогнозируется метка класса с наивысшей оценкой (confidence score)
+\begin{align*}
+	\hat{y} = \argmax_{k \in \{1, \ldots, K\}} \, f_k(x)
+\end{align*}
+
+ВАЖНО! Не смотря на то, что эта страетгия очень популярна, она обладает серьезными недостатками:
+\begin{itemize}
+	\item Масштаб оценок принятия решений (confidence values) может быть различным для бинарных классификаторов,
+	
+	\item Даже если исходный набор данных сбалансирован, то схема One-vs-All (One-vs-Rest) делает набор несбалансированным, потому как экземпляров положительного класса обычно значительно меньше экземпляров отрицательного класса.
+\end{itemize}
+
+One-vs-one обучает $ (K - 1) \, K / 2 $ классификаторов для задачи мультиклассовой классификации на $ K $-классов. Например, если решается задача на 3 класса, то нужно построить 3 классификатора: <<1--2>>, <<1--3>>, <<2--3>>. На шаге построения прогноза применяется схема голосования: все $ (K - 1) \, K / 2 $ классификаторы применяются к тестовой точке $ x $ и прогнозируется класс, получивший наибольшее число голосов.
+
+ВАЖНО! Так же как и One-vs-Rest, One-vs-One страдает от неопределенности, так как в некоторых случаях прогнозы могут быть несогласованы. Например, <<1--2>> $ \rightarrow $ 2, <<1--3>> $ \rightarrow $ 1 и <<2--3>> $ \rightarrow $ 3.
+
+\verb|scale_pos_weight|: взвешивает метки экземпляров положительного класса; используется только в задачах \emph{бинарной} \verb|binary| и \emph{многоклассовой классификации по схеме One-vs-All} (One-vs-Rest) \verb|multiclassova|;  этот параметр нельзя использовать одновременно с параметром \verb|is_unbalanced|; нужно выбрать что-то одно.
+
+\verb|reg_sqrt|: используется только в задачах регрессии; на шаге обучения модели вместо исходных меток использует $ \sqrt{label} $, а на шаге построения прогноза -- $ prediction^2 $; может быть полезен в случаях, когда значения целевой переменной изменяются в широком диапазоне.
+
+
+
+
+
+
+
+
 \subsection{Подбор гиперпараметров LightGBM с подрезкой <<слабых>> запусков}
 
 \begin{lstlisting}[
@@ -1162,10 +1593,10 @@ def objective(trial):
 	pruning_callback = optuna.integration.LightGBMPruningCallback(trial, "auc")
 	gbm = lgb.train(param, dtrain, valid_sets=[dvalid], callbacks=[pruning_callback])
 
-preds = gbm.predict(valid_x)
-pred_labels = np.rint(preds)
-accuracy = sklearn.metrics.accuracy_score(valid_y, pred_labels)
-return accuracy
+	preds = gbm.predict(valid_x)
+	pred_labels = np.rint(preds)
+	accuracy = sklearn.metrics.accuracy_score(valid_y, pred_labels)
+	return accuracy
 
 
 if __name__ == "__main__":
