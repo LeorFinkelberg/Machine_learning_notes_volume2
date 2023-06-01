@@ -580,7 +580,262 @@ series.plot(label="actual")
 probabilistic_forecast.plot(label="probabilistic forecast")
 \end{lstlisting}
 
+При работе с нейросетевыми моделями можно указать правдоподобие
+\begin{lstlisting}[
+style = ironpython,
+numbers = none
+]
+from darts.models import TCNModel
+from darts.utils.likelihood_models import LaplaceLikelihood
 
+model = TCNModel(
+	input_chunk_length=24,
+	output_chunk_length=12,
+	random_state=42,
+	likelihood=LaplaceLikelihood(),
+)
+
+model.fit(train_air_scaled, epochs=400, verbose=True);
+\end{lstlisting}
+
+При построении прогноза нужно указать \verb|num_samples >> 1|
+\begin{lstlisting}[
+style = ironpython,
+numbers = none
+]
+pred = model.predict(n=36, num_samples=500)
+
+# scale back:
+pred = scaler.inverse_transform(pred)
+\end{lstlisting}
+
+Кроме того, если есть априорная уверенность в том, что масштаб распределения составляет, скажем, 0.1, то
+\begin{lstlisting}[
+style = ironpython,
+numbers = none
+]
+model = TCNModel(
+    input_chunk_length=24,
+    output_chunk_length=12,
+    random_seed=42,
+    likelihood=LaplaceLIkelihood(prior_b=0.1),
+)
+
+model.fit(train_air_scaled, epoches=400, verbose=True)
+pred = model.predict(n=36, num_samples=500)
+pred = scaler.inverse_transform(pred)
+\end{lstlisting}
+
+По умолчанию \verb|TimeSeries.plot()| показывает медиану, а также 5-ый и 95-ый процентили, но этим можно управлять
+\begin{lstlisting}[
+style = ironpython,
+numbers = none
+]
+pred.plot(low_quantile=0.01, high_quantile=0.99, label="1-99th percentiles")
+pred.plot(low_quantile=0.2, high_quantile=0.8, label="20-80th percentiles")
+\end{lstlisting}
+
+Правдоподобие должно быть согласновано с областью значений временного ряда. Например, \verb|PoissonLikelihood| может использоваться для положительных дискретных значений, \verb|ExponentialLikelihood| -- для положительных вещественных, а \verb|BetaLikelihood| -- для вещественных значений из диапазона $ (0, 1) $.
+
+Качество вероятностного прогноза можно оценить с помощью $ \rho $-риска (или квантильной потери), который вычисляет ошибку для каждого квантиля
+\begin{lstlisting}[
+style = ironpython,
+numbers = none
+]
+from darts.metrics import rho_risk
+
+print("MAPE of median forecast: %.2f" % mape(series_air, pred))
+for rho in [0.05, 0.1, 0.5, 0.9, 0.95]:
+	rr = rho_risk(series_air, pred, rho=rho)
+	print("rho-risk at quantile %.2f: %.2f" % (rho, rr))
+\end{lstlisting}
+
+Можно работать с квантильной регрессией \verb|QuantileRegression| напрямую
+\begin{lstlisting}[
+style = ironpython,
+numbers = none
+]
+from darts.utils.likelihood_models import QuantileRegression
+
+model = TCNModel(
+	input_chunk_length=24,
+	output_chunk_length=12,
+	random_state=42,
+	likelihood=QuantileRegression([0.05, 0.1, 0.5, 0.9, 0.95]),
+)
+
+model.fit(train_air_scaled, epochs=400, verbose=True);
+\end{lstlisting}
+
+Строим прогноз
+\begin{lstlisting}[
+style = ironpython,
+numbers = none
+]
+pred = model.predict(n=36, num_samples=500)
+pred = scaler.inverse_transform(pred)
+
+series_air.plot()
+pred.plot()
+
+print("MAPE of median forecast: %.2f" % mape(series_air, pred))
+for rho in [0.05, 0.1, 0.5, 0.9, 0.95]:
+	rr = rho_risk(series_air, pred, rho=rho)
+	print("rho-risk at quantile %.2f: %.2f" % (rho, rr))
+\end{lstlisting}
+
+\subsubsection{Ансамбли моделей}
+
+Для примера мы объединим наивную модель с сезонной компонентой и модель с трендом. Наивное объединение просто берет среднее прогнозов нескольких моделей
+\begin{lstlisting}[
+style = ironpython,
+numbers = none
+]
+from darts.models import NaiveEnsembleModel
+
+models = [NaiveDrift(), NaiveSeasonal(12)]
+
+ensemble_model = NaiveEnsembleModel(models=models)
+
+backtest = ensemble_model.historical_forecasts(
+	series_air, start=0.6, forecast_horizon=3, verbose=True
+)
+
+print("MAPE = %.2f" % (mape(backtest, series_air)))
+series_air.plot()
+backtest.plot()
+\end{lstlisting}
+
+Пример использования \verb|RegressionEnsembleModel|
+\begin{lstlisting}[
+style = ironpython,
+numbers = none
+]
+from darts.models import RegressionEnsembleModel
+
+models = [NaiveDrift(), NaiveSeasonal(12)]
+
+ensemble_model = RegressionEnsembleModel(
+	forecasting_models=models, regression_train_n_points=12
+)
+
+backtest = ensemble_model.historical_forecasts(
+	series_air, start=0.6, forecast_horizon=3, verbose=True
+)
+
+print("MAPE = %.2f" % (mape(backtest, series_air)))
+series_air.plot()
+backtest.plot()
+\end{lstlisting}
+
+Еще можно посмотреть веса моделей в ансамбле
+\begin{lstlisting}[
+style = ironpython,
+numbers = none
+]
+ensemble_model.fit(series_air)
+ensemble_model.regression_model.model.coef_
+\end{lstlisting}
+
+\subsubsection{Фильтрация. Фильтра Калмана}
+
+\begin{lstlisting}[
+style = ironpython,
+numbers = none
+]
+from darts.models import KalmanFilter
+
+kf = KalmanFilter(dim_x=3)
+kf.fit(train_air_scaled)
+filtered_series = kf.filter(train_air_scaled, num_samples=100)
+
+train_air_scaled.plot()
+filtered_series.plot()
+\end{lstlisting}
+
+\subsubsection{Гауссовские процессы}
+
+Еще Darts содержит \verb|GaussianProcessFilter|, который может использоваться для вероятностного моделирования рядов
+\begin{lstlisting}[
+style = ironpython,
+numbers = none
+]
+from darts.models import GaussianProcessFilter
+from sklearn.gaussian_process.kernels import RBF
+
+# create a series with holes:
+values = train_air_scaled.values()
+values[20:22] = np.nan
+values[28:32] = np.nan
+values[55:59] = np.nan
+values[72:80] = np.nan
+series_holes = TimeSeries.from_times_and_values(train_air_scaled.time_index, values)
+series_holes.plot()
+
+kernel = RBF()
+
+gpf = GaussianProcessFilter(kernel=kernel, alpha=0.1, normalize_y=True)
+filtered_series = gpf.filter(series_holes, num_samples=100)
+
+filtered_series.plot()
+\end{lstlisting}
+
+\subsection{TimeSeries}
+
+\verb|TimeSeries| это главный класс в Darts. Этот класс представляет и одномерные и многомерные временные ряды. Временной индекс может быть как типа \verb|pandas.DatatimeIndex| (содержит метки времени) или типа \verb|pandas.RangeIndex| (содержит целочисленные значения; полезен для представления последовательности данных без временных меток). Класс \verb|TimeSeries| может даже представлять вероятностные временные ряды, для получения доверительных интервалов.
+
+Следует различать одномерные (univariate) и многомерные (multivariate) временные ряды:
+\begin{itemize}
+	\item \emph{Многомерные} временные ряды содержат несколько измерений (то есть несколько значений на один временной шаг); еще можно сказать, что многомерный временной ряд это пакет временных рядов, то есть несколько временных рядов, наложенных один на другой (\pic{fig:multivar}).
+	
+	\item \emph{Одномерные} временные ряды содержат только одно измерение (то есть только одно скалярное значение на один временной шаг).
+\end{itemize}
+
+\begin{figure}[h]
+	\centering
+	\includegraphics[scale=0.8]{figures/multivar.png}
+	\caption{ Один экземпляр многомерного временного ряда. Один пакет временных рядов }\label{fig:multivar}
+\end{figure}
+
+Иногда измерения называют \emph{компонентами}. Одиночный объект \verb|TimeSeries| можно быть как одномерным (то есть содержать только одну компоненту) или многомерным (то есть содержать несколько компонент). В многомерном временном ряду, все компоненты разделяют одну и туже временную ось, то есть они разделяют одни и те же временные шаги.
+
+Некоторые модели в Darts (и все модели машинного обучения) поддерживают многомерные временные ряды. 
+
+Кроме того, некоторые модели могут работать с \emph{множественными} (multiple) временными рядами, которые представляют собой последовательность нескольких объектов \verb|TimeSeries| -- например, простой список объектов \verb|TimeSeries| (\pic{fig:multiple}). Множественные временные ряды еще называют \emph{панельными данными}. Такие временные ряды не обязаны разделять один и тот же временной индекс. Например, один временной ряд может начинаться с 1990 года, а другой -- с 2000. Они даже не обязаны иметь одну и ту же частоту. 
+
+\begin{figure}[h]
+	\centering
+	\includegraphics[scale=0.8]{figures/multiple.png}
+	\caption{ Панельные данные. Множественные временные ряды -- последовательность временных рядов. Они могут разделять одну и туже временную ось, а могут и не разделять. Могут быть многомерными, а могут и не быть }\label{fig:multiple}
+\end{figure}
+
+Пример многомерного временного ряда: кровянное давление и ЧСС одного пациента (один многомерный ряд с 2 компонентами).
+
+Пример панельного временного ряда: кровянное давление и ЧСС нескольких пациентов, измеренные в разное время (получается один многомерный ряд с 2 компонентами на одного пациента).
+
+В Darts вероятностное прогнозирование осуществляется с помощью процедуры Монте-Карло. Этот подход позволяет представлять совместные распределения произвольной сложности (и по времени, и по компонентам) без ограничений параметрических моделей.
+
+С помощью \verb|concatenate()| можно объединять несколько временных рядов по различным осям. Ось \verb|axis=0| объединяет по времени, ось \verb|axis=1| -- по компонентам, а ось \verb|axis=2| -- по стохастическим экземплярам.
+
+Например
+\begin{lstlisting}[
+style = ironpython,
+numbers = none
+]
+from darts import concatenate
+
+my_multivariate_series = concatenate([series1, series2, ...], axis=1)
+\end{lstlisting}
+объединяет несколько временных рядов в один многомерный.
+
+Опционально временные ряды могут содержать так называемые \emph{статические ковариаты} (что-то вроде метаинформации). Например:
+\begin{itemize}
+	\item Расположение хранилища,
+	
+	\item ID продукта,
+	
+	\item и пр.
+\end{itemize}
 
 
 
