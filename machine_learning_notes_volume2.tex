@@ -837,7 +837,813 @@ my_multivariate_series = concatenate([series1, series2, ...], axis=1)
 	\item и пр.
 \end{itemize}
 
+\subsection{Обзор моделей прогнозирования}
 
+Все модели прогнозирования устроены одинаково: создаем экземпляр класса модели, обучаем с помощью \verb|fit()| и строим прогноз \verb|predict()|
+\begin{lstlisting}[
+style = ironpython,
+numbers = none	
+]
+from darts.models import NaiveSeasonal
+
+naive_model = NaiveSeasonal(K=1)            # init
+naive_model.fit(train)                      # fit
+naive_forecast = naive_model.predict(n=36)  # predict
+\end{lstlisting}
+
+Аргумент \verb|n| в \verb|predict()| это горизонт прогноза (число точек, для которых нужно построить прогноз).
+
+Сохранение и загрузка моделей
+\begin{lstlisting}[
+style = ironpython,
+numbers = none
+]
+from darts.models import RegressionModel
+
+model = RegressionModel(lags=4)
+
+model.save("my_model.pkl")
+model_loaded = RegressionModel.load("my_model.pkl")
+\end{lstlisting}
+
+С torch-моделями сохраняются и параметры модели и состояние обучения
+\begin{lstlisting}[
+style = ironpython,
+numbers = none
+]
+from darts.models import NBEATSModel
+
+model = NBEATSModel(input_chunk_length=24,
+output_chunk_length=12)
+
+model.save("my_model.pt")
+model_loaded = NBEATSModel.load("my_model.pt")
+\end{lstlisting}
+
+Пример работы с многомерными временными рядами (\pic{fig:multivar_series})
+\begin{lstlisting}[
+style = ironpython,
+numbers = none
+]
+import darts.utils.timeseries_generation as tg
+from darts.models import KalmanForecaster
+import matplotlib.pyplot as plt
+
+series1 = tg.sine_timeseries(value_frequency=0.05, length=100) + 0.1 * tg.gaussian_timeseries(length=100)
+series2 = tg.sine_timeseries(value_frequency=0.02, length=100) + 0.2 * tg.gaussian_timeseries(length=100)
+
+multivariate_series = series1.stack(series2)
+
+model = KalmanForecaster(dim_x=4)
+model.fit(multivariate_series)
+pred = model.predict(n=50, num_samples=100)
+
+plt.figure(figsize=(8,6))
+multivariate_series.plot(lw=3)
+pred.plot(lw=3, label='forecast')
+\end{lstlisting}
+
+\begin{figure}[h]
+	\centering
+	\includegraphics[scale=1.2 ]{figures/multivar_series.png}
+	\caption{ Прогноз на многомерном временном ряду }\label{fig:multivar_series}
+\end{figure}
+
+В нейросетевых моделях можно использовать \emph{квантильную регрсессию}. Это часто оказывается полезен на практике в случаях, когда нет уверенности в <<истинном>> распределении или когда параметрические модели дают слабые результаты
+\begin{lstlisting}[
+style = ironpython,
+numbers = none
+]
+from darts.datasets import AirPassengersDataset
+from darts import TimeSeries
+from darts.models import TCNModel
+from darts.dataprocessing.transformers import Scaler
+from darts.utils.likelihood_models import QuantileRegression
+
+series = AirPassengersDataset().load()
+train, val = series[:-36], series[-36:]
+
+scaler = Scaler()
+train = scaler.fit_transform(train)
+val = scaler.transform(val)
+series = scaler.transform(series)
+
+model = TCNModel(
+    input_chunk_length=30,
+    output_chunk_length=12,
+    likelihood=QuantileRegression(quantiles=[0.01, 0.05, 0.2, 0.5, 0.8, 0.95, 0.99])
+)
+model.fit(train, epochs=400)
+pred = model.predict(n=36, num_samples=500)
+
+series.plot()
+pred.plot(label='forecast')
+\end{lstlisting}
+
+В Darts прореживание (dropout) это еще один способ учета неопределенности. Для примера обучим модель \verb|TCNModel| (с квадратической функцией потерь) с 10\%-ым прореживанием и построим прогноз с прореживанием по Монте-Карло
+\begin{lstlisting}[
+style = ironpython,
+numbers = none
+]
+from darts.datasets import AirPassengersDataset
+from darts import TimeSeries
+from darts.models import TCNModel
+from darts.dataprocessing.transformers import Scaler
+from darts.utils.likelihood_models import QuantileRegression
+
+series = AirPassengersDataset().load()
+train, val = series[:-36], series[-36:]
+
+scaler = Scaler()
+train = scaler.fit_transform(train)
+val = scaler.transform(val)
+series = scaler.transform(series)
+
+model = TCNModel(
+    input_chunk_length=30,
+    output_chunk_length=12,
+    dropout=0.1
+)
+model.fit(train, epochs=400)
+pred = model.predict(
+    n=36,
+    mc_dropout=True,
+    num_samples=500
+)
+
+series.plot()
+pred.plot(label='forecast')
+\end{lstlisting}
+
+Некоторые регрессионные модели поддерживают вероятностное прогнозирование. У классов \verb|LinearRegressionModel|, \verb|LightGBMModel| и \verb|XGBModel| есть аргумент \verb|likelihood|. Если задать \verb|"poisson"|, то модель будет обучаться распределению Пуассона, а если \verb|"quantile"|, то модель будет использовать линейные потери (pinball loss) для квантильной регрессии
+\begin{lstlisting}[
+style = ironpython,
+numbers = none
+]
+from darts.datasets import AirPassengersDataset
+from darts import TimeSeries
+from darts.models import LinearRegressionModel
+
+series = AirPassengersDataset().load()
+train, val = series[:-36], series[-36:]
+
+model = LinearRegressionModel(
+    lags=30,
+	likelihood="quantile",
+	quantiles=[0.05, 0.1, 0.25, 0.5, 0.75, 0.9, 0.95])
+model.fit(train)
+pred = model.predict(n=36, num_samples=500)
+
+series.plot()
+pred.plot(label='forecast')
+\end{lstlisting}
+
+\subsection{Torch-ие модели}
+
+Каждый фрагмент (chunk) содержит входной фрагмент -- представляет прошлое -- и выходной фрагмент -- представляет будущее
+\begin{lstlisting}[
+style = ironpython,
+numbers = none
+]
+# model that looks 7 time steps back (past) and 1 time step ahead (future)
+model = SomeTorchForecastingModel(
+    input_chunk_length=7,
+    output_chunk_length=1,
+    **model_kwargs
+)
+\end{lstlisting}
+
+Все Torch Forecast Models могут быть обучены на одиночном (single) или множественном (mulitple) целевом временном ряде.
+
+\subsubsection{Как используются входные данные в TFM при обучении и построении прогноза}
+
+Пусть требуется построить модель прогнозирования уровня продаж мороженного. Тогда
+\begin{itemize}
+	\item прошлые значения целевого временного ряда (past target): фактические продажи мороженного \verb|ice_creame_sales|,
+	
+	\item будущие значения целевого временного ряда (future target): предсказанное значение продаж на следующий день,
+	
+	\item ковариаты <<прошлого времени>>: измеренная средняя дневная температура \verb|temperature|,
+	
+	\item ковариаты <<будущего времени>>: день недели в прошлом и будущем \verb|weekday|.
+\end{itemize}
+
+Допустим, что есть недельный паттерн в данных, поэтому \verb|input_chunk_length=7|.
+
+Тогда \verb|output_chunk_length| можно задать равным 1, чтобы строить прогноз на следующий день
+\begin{lstlisting}[
+style = ironpython,
+numbers = none
+]
+from darts.models import TFTModel
+
+model = TFTModel(
+    input_chunk_length=7,
+    output_chunk_length=1,
+)
+
+model.fit(
+    series=ice_cream_sales,
+    past_covariates=temperature,
+    future_covariates=weekday,
+)
+\end{lstlisting}
+
+ВАЖНО! Длинный целевой ряд \verb|target| может привести к очень большому числу обучающих последовательностей / зкземпляров. Можно задать верхнюю границу для числа последовательностей / экземпялров с помощью \verb|fit()|-параметра \verb|max_samples_per_ts|
+\begin{lstlisting}[
+style = ironpython,
+numbers = none
+]
+# fit only on the 10 "most recent" sequences
+model.fit(target, max_samples_per_ts=10)
+\end{lstlisting}
+
+{\color{blue}ВАЖНО! Точка начала каждой последовательности выбирается \emph{случайно}.}
+
+After having completed computations on the first sequence, the model moves to the next one and performs the same training steps. The starting point of each sequence is selected randomly from the sequential dataset.
+
+\begin{figure}[h]
+	\centering
+	\includegraphics[scale=0.9 ]{figures/darts_seq_to_seq.png}
+	\caption{ Процедура обучения модели TFM }\label{fig:darts_seq_to_seq}
+\end{figure}
+
+Еще можно обучать модель с валидационным поднабором
+\begin{lstlisting}[
+style = ironpython,
+numbers = none
+]
+# create train and validation sets
+ice_cream_sales_train, ice_cream_sales_val = ice_cream_sales.split_after(training_cutoff)
+
+# train with validation set
+model.fit(series=ice_cream_sales_train,
+	past_covariates=temperature,
+	future_covariates=weekday,
+	val_series=ice_cream_sales_val,
+	val_past_covariates=temperature,
+	val_future_covariates=weekday)
+\end{lstlisting}
+
+Модель будет обучаться как и раньше, но дополнительно еще будут вычисляться потери на валидационном поднаборе.
+
+Следует различать два случая:
+\begin{itemize}
+	\item Если \verb|n <= output_chunk_length|: мы можем предсказать \verb|n| за один раз (используя один <<внутренний вызов модели>>); в данном примере \verb|n = 1| (\pic{fig:n_lt_output}),
+	
+	\item Если \verb|n > output_chunk_length|: мы можем предсказать \verb|n|, вызвав внутренюю модель несколько раз. Каждый вызов возвращает \verb|output_chunk_lengh| точек прогноза.
+	
+	В данном примере \verb|n = 3|. То есть чтобы построить прогноз, мы должны предоставить следующие \verb|n - output_chunk_length = 2| временные метки (дня). К сожалению, у нас нет измеренных значений температуры в будущем, но если у нас есть прогноз температуры на следующие 2 дня, то можно эти прогнозные точки учесть (\pic{fig:n_gt_output})
+\begin{lstlisting}[
+style = ironpython,
+numbers = none
+]
+temperature = temperature.concatenate(
+    temperature_forecast,
+    axis=0
+)
+
+prediction = model.predict(
+    n=n,
+    past_covariates=temperature,
+    future_covariates=weekday,
+)
+\end{lstlisting}
+\end{itemize}
+
+\begin{figure}[h]
+	\centering
+	\includegraphics[scale=0.9 ]{figures/n_lt_output.png}
+	\caption{ Построение прогноза на одной последовательности для \texttt{n <= output\_chunk\_length} }\label{fig:n_lt_output}
+\end{figure}
+
+\begin{figure}[h]
+	\centering
+	\includegraphics[scale=0.9 ]{figures/n_gt_output.png}
+	\caption{ Построение прогноза для \texttt{n > output\_chunk\_length} }\label{fig:n_gt_output}
+\end{figure}
+
+Для управления версиями модели можно использовать точки проверки (checkpoints)
+\begin{lstlisting}[
+style = ironpython,
+numbers = none
+]
+model = SomeTorchForecastingModel(..., model_name='my_model', save_checkpoints=True)
+
+# checkpoints are saved automatically
+model.fit(...)
+
+# load the model state that performed best on validation set
+best_model = model.load_from_checkpoint(model_name='my_model', best=True)
+\end{lstlisting}
+
+Можно сохранить и загрузить модель в ручную
+\begin{lstlisting}[
+style = ironpython,
+numbers = none	
+]
+model.save("/your/path/to/save/model.pt")
+loaded_model = model.load("/your/path/to/save/model.pt")
+\end{lstlisting}
+
+Можно модель, обученную и сохраненную на GPU, загрузить на CPU
+\begin{lstlisting}[
+style = ironpython,
+numbers = none
+]
+# define a model using gpu as accelerator
+model = SomeTorchForecastingModel(...,
+		model_name='my_model',
+		save_checkpoints=True,
+		pl_trainer_kwargs={
+			"accelerator":"gpu",
+			"devices": -1,
+		})
+
+# train the model, automatic checkpoints will be created
+model.fit(...)
+
+# specify the device to which the model should be loaded
+loaded_model = SomeTorchForecastingModel.load_from_checkpoint(model_name='my_model',
+		best=True,
+		map_location="cpu")
+loaded_model.to_cpu()
+
+# run inference
+loaded_model.predict(...)
+\end{lstlisting}
+
+Еще модель можно загрузить на CPU в ручную
+\begin{lstlisting}[
+style = ironpython,
+numbers = none
+]
+model.save("/your/path/to/save/model.pt")
+loaded_model = model.load("/your/path/to/save/model.pt", map_location="cpu")
+loaded_model.to_cpu()
+\end{lstlisting}
+
+\subsubsection{Повторное обучение или подбор гиперпараметров предобученной модели}
+
+Для того чтобы повторно обучить или подобрать гиперпараметры модели с использованием различных оптимизаторов и / или планировщиков темпа обучения, можно загрузить веса из точек сохранения (checkpoints) в новую модель
+\begin{lstlisting}[
+style = ironpython,
+numbers = none
+]
+# model with identical architecture but different optimizer (default: torch.optim.Adam)
+model_finetune = SomeTorchForecastingModel(...,  # use identical parameters & values as in original model
+		optimizer_cls=torch.optim.SGD,
+		optimizer_kwargs={"lr": 0.001})
+
+# load the weights from a checkpoint
+model_finetune.load_weights_from_checkpoint(model_name='my_model', best=True)
+
+model_finetune.fit(...)
+\end{lstlisting}
+
+И аналогичным образом можно загрузить модель в ручную
+\begin{lstlisting}[
+style = ironpython,
+numbers = none
+]
+# model with identical architecture but different lr scheduler (default: None)
+model_finetune = SomeTorchForecastingModel(...,  # use identical parameters & values as in original model
+		lr_scheduler_cls=torch.optim.lr_scheduler.ExponentialLR,
+		lr_scheduler_kwargs={"gamma": 0.09})
+
+# load the weights from a manual save
+model_finetune.load_weights("/your/path/to/save/model.pt")
+\end{lstlisting}
+
+\subsubsection{Обратные вызовы}
+
+Обратные вызовы это очень мощный способ управления поведением модели во время обучения (мониторинг производительности модели, ранняя остановка и пр.).
+
+Ранняя остановка это эффективный способ борьбы с переобучением (плюс снижается время обучения). Обучение прекращается, когда метрика качества на валидационном наборе перестает значимо улучшаться.
+
+Раннюю остановку можно использовать с любой моделью \verb|TorchForecastingModel|
+\begin{lstlisting}[
+style = ironpython,
+numbers = none
+]
+import pandas as pd
+from pytorch_lightning.callbacks import EarlyStopping
+from torchmetrics import MeanAbsolutePercentageError
+
+from darts.dataprocessing.transformers import Scaler
+from darts.datasets import AirPassengersDataset
+from darts.models import NBEATSModel
+
+# read data
+series = AirPassengersDataset().load()
+
+# create training and validation sets:
+train, val = series.split_after(pd.Timestamp(year=1957, month=12, day=1))
+
+# normalize the time series
+transformer = Scaler()
+train = transformer.fit_transform(train)
+val = transformer.transform(val)
+
+# any TorchMetric or val_loss can be used as the monitor
+torch_metrics = MeanAbsolutePercentageError()
+
+# early stop callback
+my_stopper = EarlyStopping(
+	monitor="val_MeanAbsolutePercentageError",  # "val_loss",
+	patience=5,
+	min_delta=0.05,
+	mode='min',
+)
+pl_trainer_kwargs = {"callbacks": [my_stopper]}
+
+# create the model
+model = NBEATSModel(
+	input_chunk_length=24,
+	output_chunk_length=12,
+	n_epochs=500,
+	torch_metrics=torch_metrics,
+	pl_trainer_kwargs=pl_trainer_kwargs)
+
+# use validation set for early stopping
+model.fit(
+	series=train,
+	val_series=val,
+)
+\end{lstlisting}
+
+Потери на обучающем и валидационном поднаборе могут автоматически логироваться с помощью tensorboard. После активации, Darts будет по умолчанию писать логи в директорию \verb|darts_logs| в текущей директории проекта. После установки библиотеки \verb|tensorboard| можно визуализировать логи  из командной строки
+\begin{lstlisting}[
+style = bash,
+numbers = none
+]
+$ tensorboard --log_dir darts_logs
+\end{lstlisting}
+
+Можно реализовать свой собственный обратный вызов
+\begin{lstlisting}[
+style = ironpython,
+numbers = none
+]
+from pytorch_lightning.callbacks import Callback
+
+class LossLogger(Callback):
+	def __init__(self):
+		self.train_loss = []
+		self.val_loss = []
+
+	# will automatically be called at the end of each epoch
+	def on_train_epoch_end(self, trainer: "pl.Trainer", pl_module: "pl.LightningModule") -> None:
+		self.train_loss.append(float(trainer.callback_metrics["train_loss"]))
+
+	def on_validation_epoch_end(self, trainer: "pl.Trainer", pl_module: "pl.LightningModule") -> None:
+		self.val_loss.append(float(trainer.callback_metrics["val_loss"]))
+
+
+loss_logger = LossLogger()
+
+model = SomeTorchForecastingModel(
+...,
+nr_epochs_val_period=1,  # perform validation after every epoch
+	pl_trainer_kwargs={"callbacks": [loss_logger]}
+)
+
+# fit must include validation set for "val_loss"
+model.fit(...)
+\end{lstlisting}
+
+\subsubsection{Рекомендации по производительности}
+
+\begin{itemize}
+	\item Экземпляр класса \verb|TimeSeries| лучше строить в 32-битном представлении. Большой прирост производительности можно получить, когда и данные, и модель имеют 32-битное представление. Можно построить экземпляр \verb|TimeSeries| на базе массива с типом \verb|np.float32|. Или можно просто \verb|my_series32 = my_series.astype(np.float32)|.
+	
+	\item Использование GPU часто повышает производительность по сравнению с CPU.
+	
+	\item Большой размер пакета ускоряет обучение поскольку сокращает количество обратных проходов за эпоху и позволяет лучше распараллелить вычисления. Однако, больший размер пакета отвечает и большему потреблению памяти. Нужно подбирать размер пакета.
+	
+	\item Имеет смысл подобрать значение параметра \verb|num_loader_workers|. Все глубокие модели в Darts имеют параметр \verb|num_loader_workers| в методах \verb|fit()| и \verb|predict()|, которые конфигурируют \verb|num_workers| в PyTorch \verb|DataLoaders|. По умолчанию этот параметр выставлен в 0, что означает, что главный процесс позаботится и о загрузке данных. Если выставить \verb|num_workers > 0|, то будут использоваться дополнительные воркеры. Это повышает потребление памяти, но в некоторых случаях может повысить и производительность. Оптимальное значение зависит от многих факторов: размер пакета, используется ли GPU и пр.
+	
+	\item Разумеется на производительность модели сильное влияние оказывает ее размер (количество параметров) и количество операций требуемых для прямого и обратного проходов. Модели в Darts можно настраивать (число слоев, число <<голов внимания>> и пр.) и эти гиперпараметры оказывают сильное влияние на производительность. Рекомендуется начинать с компактных моделей.
+	
+	\item Полезно заранее загрузить все объекты \verb|TimeSeries| в память, если это возможно. Darts позволяет обучать модель на любой \verb|Sequence[TimeSeries]|, что означает, что на больших наборах можно написать свою собственную реализацию \verb|Sequence| и читать временные ряды с диска \emph{лениво}. Рекомендуется при обучении модели на панельных временных рядах (multiple series), сначала попробовать обучить модель на простом списке временных рядов \verb|List[Sequence]|.
+	
+	\item Не используйте \emph{все} доступные фрагменты (sub-series) временного ряда для обучения. По умолчанию, при вызове \verb|fit()| модели в Darts строят экземпляр \verb|TrainingDataset|, согласованный с используемой моделью (например, \verb|PastCovariatesTorchModel|, \verb|FutureCovariatesTorchModel| и т.д.). По умолчанию, эти наборы данных часто будут содержать \emph{все} возможные фрагменты (и для входа, и для выхода) в каждом объекте \verb|TimeSeires|. Если объект \verb|TimeSeries| длинный, то в результате получиться очень большое число обучающих экземпляров, которое линейно влияет на время обучения модели (на одну эпоху). Чтобы ограничить этот эффект можно:
+	\begin{itemize}
+		\item Задать \verb|max_samples_per_ts| в \verb|fit()|. Тогда для обучения модели будут использоваться только последние \verb|max_samples_per_ts| экземпляров для каждого объекта \verb|TimeSeries|.
+		
+		\item Если этот параметр не помогает, то можно реализовать свой собственный \verb|TrainingDataset| и определить как будет разбиваться объект \verb|TimeSeries|. 
+	\end{itemize}
+\end{itemize}
+
+Например в наборе данных \verb|darts.datasets.EnergyDataset| 28 050 временных меток и 28 измерений. Если задать \verb|input_chunk_length=48| и \verb|output_chunk_length=12|, получится 27 991 обучающий экземпляр.
+
+\subsection{Ковариаты}
+
+В Darts \emph{ковариаты} относятся к внешним данным, которые могут быть использованы моделью для улучшения прогноза. В контексте прогнозирования модели целевой временной ряд предсказывается, а ковариаты нет. Различают следующие типы ковариатов:
+\begin{itemize}
+	\item ковариаты <<прошлого времени>> (past covariates): известны только в прошлом (например, измерения какой-то величины),
+	
+	\item ковариаты <<будущего времени>> (future covariates): известны в будущем (например, прогноз погоды),
+	
+	\item статические ковариаты: не изменяются во времени (содержат не изменяющуюся во времени информацию о целевом временном ряду).
+\end{itemize}
+
+\begin{lstlisting}[
+style = ironpython,
+numbers = none
+]
+# create one of Darts' forecasting models
+model = SomeForecastingModel(...)
+
+# fitting model with past and future covariates
+model.fit(target=target,
+		past_covariates=past_covariates_train,
+		future_covariates=future_covariates_train)
+
+# predict the next n=12 steps
+model.predict(n=12,
+		series=target,  # only required for Global Forecasting Models
+		past_covariates=past_covariates_pred,
+		future_covariates=future_covariates_pred)
+\end{lstlisting}
+
+Если модель обучается с использованием \verb|past_covariates|, то придется эти ковариаты \verb|past_covariates| передать и на шаге построения прогноза. То же самое касается и \verb|future_covariates| с тем отличием, что ковариаты прошлого времени должны иметь по крайней мере те же временные метки, что и у целевого временного ряда, а ковариаты будущего времени должны иметь те же метки, что и у целевого временого ряда + \verb|n| шагов в будущее (\pic{fig:past_future_covariates}).
+
+\begin{figure}[h]
+	\centering
+	\includegraphics[scale=0.9 ]{figures/past_future_covariates.png}
+	\caption{ Пояснения к построению прогноза на горизонт \texttt{n=2} }\label{fig:past_future_covariates}
+\end{figure}
+
+Примеры:
+\begin{itemize}
+	\item \verb|past_covariates|: обычно это какие-то измерения или временные атрибуты:
+	\begin{itemize}
+		\item среднесуточная температура (\emph{измеренная} и известная только в прошлом),
+		
+		\item день недели, месяц, год.
+	\end{itemize}
+
+    \item \verb|future_covariates|: обычно это прогнозы (известные в будущем) или временные атрибуты:
+    \begin{itemize}
+    	\item среднесуточная температура (\emph{спрогнозированная} и известная в будущем),
+    	
+    	\item день недели, месяц, год.
+    \end{itemize}
+
+    \item \verb|static_covariates|: не зависимые от времени/постоянные/статичные характеристики целевого временного ряда:
+    \begin{itemize}
+    	\item категориальные: место размещения целевого ряда (страна, город и т.д.),
+    	
+    	\item числовые: население страны, для которой записывается целеовой временной ряд,
+    	
+    	\item средняя температура региона, для которого записывается целевой временной ряд.
+    \end{itemize}
+\end{itemize}
+
+Временные атрибуты очень полезны, так как помогают модели уловить сезонные паттерны. Эмпририческое правило, позволяющее узнать какие ковариаты должны использоваться: если значения известны заранее, то они могут быть как ковариатами будущего времени, так и ковариатами прошлого времени; а если значения заранее не известны, то они могут быть только ковариатами прошлого времени.
+
+Локальные модели (Local Forecast Models, LFMs) обычно обучаются на \emph{полном} наборе данных \verb|target| и \verb|future_covariates| (если поддерживаются). 
+
+Глобальные модели (Global Forecast Models, GFMs) обучаются и предсказывают на \emph{фрагментнах фиксированной длины} (fixed-length chunks) целевого временого ряда \verb|target| и \verb|*_covariates| (если поддерживаются).
+
+\subsection{Подбор гиперпараметров в Darts}
+
+Когда дело касается подбора гиперпараметров, то в Darts нет ничего особенного.
+
+\subsubsection{Подбор гиперпараметров с помощью Optuna}
+
+\begin{lstlisting}[
+style = ironpython,
+numbers = none
+]
+import numpy as np
+import optuna
+import torch
+from optuna.integration import PyTorchLightningPruningCallback
+from pytorch_lightning.callbacks import EarlyStopping
+from sklearn.preprocessing import MaxAbsScaler
+
+from darts.dataprocessing.transformers import Scale
+from darts.datasets import AirPassengersDatasetr
+from darts.metrics import smape
+from darts.models import TCNModel
+from darts.utils.likelihood_models import GaussianLikelihood
+
+# load data
+series = AirPassengersDataset().load().astype(np.float32)
+
+# split in train / validation (note: in practice we would also need a test set)
+VAL_LEN = 36
+train, val = series[:-VAL_LEN], series[-VAL_LEN:]
+
+# scale
+scaler = Scaler(MaxAbsScaler())
+train = scaler.fit_transform(train)
+val = scaler.transform(val)
+
+# define objective function
+def objective(trial):
+	# select input and output chunk lengths
+	in_len = trial.suggest_int("in_len", 12, 36)
+	out_len = trial.suggest_int("out_len", 1, in_len-1)
+	
+	# Other hyperparameters
+	kernel_size = trial.suggest_int("kernel_size", 2, 5)
+	num_filters = trial.suggest_int("num_filters", 1, 5)
+	weight_norm = trial.suggest_categorical("weight_norm", [False, True])
+	dilation_base = trial.suggest_int("dilation_base", 2, 4)
+	dropout = trial.suggest_float("dropout", 0.0, 0.4)
+	lr = trial.suggest_float("lr", 5e-5, 1e-3, log=True)
+	include_year = trial.suggest_categorical("year", [False, True])
+	
+	# throughout training we'll monitor the validation loss for both pruning and early stopping
+	pruner = PyTorchLightningPruningCallback(trial, monitor="val_loss")
+	early_stopper = EarlyStopping("val_loss", min_delta=0.001, patience=3, verbose=True)
+	callbacks = [pruner, early_stopper]
+	
+	# detect if a GPU is available
+	if torch.cuda.is_available():
+		pl_trainer_kwargs = {
+			"accelerator": "gpu",
+			"gpus": -1,
+			"auto_select_gpus": True,
+			"callbacks": callbacks,
+		}
+		num_workers = 4
+	else:
+		pl_trainer_kwargs = {"callbacks": callbacks}
+		num_workers = 0
+	
+	# optionally also add the (scaled) year value as a past covariate
+	if include_year:
+		encoders = {"datetime_attribute": {"past": ["year"]},
+			"transformer": Scaler()}
+	else:
+		encoders = None
+	
+	# reproducibility
+	torch.manual_seed(42)
+	
+	# build the TCN model
+	model = TCNModel(
+		input_chunk_length=in_len,
+		output_chunk_length=out_len,
+		batch_size=32,
+		n_epochs=100,
+		nr_epochs_val_period=1,
+		kernel_size=kernel_size,
+		num_filters=num_filters,
+		weight_norm=weight_norm,
+		dilation_base=dilation_base,
+		dropout=dropout,
+		optimizer_kwargs={"lr": lr},
+		add_encoders=encoders,
+		likelihood=GaussianLikelihood(),
+		pl_trainer_kwargs=pl_trainer_kwargs,
+		model_name="tcn_model",
+		force_reset=True,
+		save_checkpoints=True,
+	)
+	
+	
+	# when validating during training, we can use a slightly longer validation
+	# set which also contains the first input_chunk_length time steps
+	model_val_set = scaler.transform(series[-(VAL_LEN + in_len) :])
+	
+	# train the model
+	model.fit(
+		series=train,
+		val_series=model_val_set,
+		num_loader_workers=num_workers,
+	)
+	
+	# reload best model over course of training
+	model = TCNModel.load_from_checkpoint("tcn_model")
+	
+	# Evaluate how good it is on the validation set, using sMAPE
+	preds = model.predict(series=train, n=val_len)
+	smapes = smape(val, preds, n_jobs=-1, verbose=True)
+	smape_val = np.mean(smapes)
+	
+	return smape_val if smape_val != np.nan else float("inf")
+
+
+# for convenience, print some optimization trials information
+def print_callback(study, trial):
+	print(f"Current value: {trial.value}, Current params: {trial.params}")
+	print(f"Best value: {study.best_value}, Best params: {study.best_trial.params}")
+
+
+# optimize hyperparameters by minimizing the sMAPE on the validation set
+study = optuna.create_study(direction="minimize")
+study.optimize(objective, n_trials=100, callbacks=[print_callback])
+\end{lstlisting}
+
+\subsubsection{Подбор гиперпараметров с помощью Ray Tune}
+
+\begin{lstlisting}[
+style = ironpython,
+numbers = none	
+]
+import pandas as pd
+from pytorch_lightning.callbacks import EarlyStopping
+from ray import tune
+from ray.tune import CLIReporter
+from ray.tune.integration.pytorch_lightning import TuneReportCallback
+from ray.tune.schedulers import ASHAScheduler
+from torchmetrics import MeanAbsoluteError, MeanAbsolutePercentageError, MetricCollection
+
+from darts.dataprocessing.transformers import Scaler
+from darts.datasets import AirPassengersDataset
+from darts.models import NBEATSModel
+
+def train_model(model_args, callbacks, train, val):
+torch_metrics = MetricCollection([MeanAbsolutePercentageError(), MeanAbsoluteError()])
+# Create the model using model_args from Ray Tune
+model = NBEATSModel(
+	input_chunk_length=24,
+	output_chunk_length=12,
+	n_epochs=500,
+	torch_metrics=torch_metrics,
+	pl_trainer_kwargs={"callbacks": callbacks, "enable_progress_bar": False},
+	**model_args)
+
+	model.fit(
+		series=train,
+		val_series=val,
+	)
+
+# Read data:
+series = AirPassengersDataset().load()
+
+# Create training and validation sets:
+train, val = series.split_after(pd.Timestamp(year=1957, month=12, day=1))
+
+# Normalize the time series (note: we avoid fitting the transformer on the validation set)
+transformer = Scaler()
+transformer.fit(train)
+train = transformer.transform(train)
+val = transformer.transform(val)
+
+# Early stop callback
+my_stopper = EarlyStopping(
+	monitor="val_MeanAbsolutePercentageError",
+	patience=5,
+	min_delta=0.05,
+	mode='min',
+)
+
+# set up ray tune callback
+tune_callback = TuneReportCallback(
+	{
+		"loss": "val_Loss",
+		"MAPE": "val_MeanAbsolutePercentageError",
+	},
+	on="validation_end",
+)
+
+# define the hyperparameter space
+config = {
+	"batch_size": tune.choice([16, 32, 64, 128]),
+	"num_blocks": tune.choice([1, 2, 3, 4, 5]),
+	"num_stacks": tune.choice([32, 64, 128]),
+	"dropout": tune.uniform(0, 0.2),
+}
+
+reporter = CLIReporter(
+	parameter_columns=list(config.keys()),
+	metric_columns=["loss", "MAPE", "training_iteration"],
+)
+
+resources_per_trial = {"cpu": 8, "gpu": 1}
+
+# the number of combinations to try
+num_samples = 10
+
+scheduler = ASHAScheduler(max_t=1000, grace_period=3, reduction_factor=2)
+
+train_fn_with_parameters = tune.with_parameters(
+	train_model, callbacks=[my_stopper, tune_callback], train=train, val=val,
+)
+
+# optimize hyperparameters by minimizing the MAPE on the validation set
+analysis = tune.run(
+	train_fn_with_parameters,
+	resources_per_trial=resources_per_trial,
+	# Using a metric instead of loss allows for
+	# comparison between different likelihood or loss functions.
+	metric="MAPE",  # any value in TuneReportCallback.
+	mode="min",
+	config=config,
+	num_samples=num_samples,
+	scheduler=scheduler,
+	progress_reporter=reporter,
+	name="tune_darts",
+)
+
+print("Best hyperparameters found were: ", analysis.best_config)
+\end{lstlisting}
 
 
 
