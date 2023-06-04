@@ -1645,6 +1645,410 @@ analysis = tune.run(
 print("Best hyperparameters found were: ", analysis.best_config)
 \end{lstlisting}
 
+\subsection{Примеры использования}
+
+\subsubsection{Панельные временные ряды, предобученные модели и ковариаты}
+
+Импорты
+\begin{lstlisting}[
+style = ironpython,
+numbers = none	
+]
+# fix python path if working locally
+from utils import fix_pythonpath_if_working_locally
+
+fix_pythonpath_if_working_locally()
+
+import pandas as pd
+import numpy as np
+import torch
+import matplotlib.pyplot as plt
+
+from darts import TimeSeries
+from darts.utils.timeseries_generation import (
+	gaussian_timeseries,
+	linear_timeseries,
+	sine_timeseries,
+)
+from darts.models import (
+	RNNModel,
+	TCNModel,
+	TransformerModel,
+	NBEATSModel,
+	BlockRNNModel,
+	VARIMA,
+)
+from darts.metrics import mape, smape, mae
+from darts.dataprocessing.transformers import Scaler
+from darts.utils.timeseries_generation import datetime_attribute_timeseries
+from darts.datasets import AirPassengersDataset, MonthlyMilkDataset, ElectricityDataset
+
+import logging
+
+logging.disable(logging.CRITICAL)
+
+import warnings
+
+warnings.filterwarnings("ignore")
+
+%matplotlib inline
+
+# for reproducibility
+torch.manual_seed(1)
+np.random.seed(1)
+\end{lstlisting}
+
+Darts поддерживает многие прогностические модели, но лишь некоторые могут обучаться на нескольких временных рядах. Модели, которые поддерживают обучение на панельных временных рядах (то есть на последовательности временных рядов) называются \emph{глобальными моделями}:
+\begin{itemize}
+	\item BlockRNNModel,
+	
+	\item RNNModel,
+	
+	\item Temporal Convolutional Networks (TCNs),
+	
+	\item N-Beats,
+	
+	\item Transformer model.
+\end{itemize}
+
+Различают два вида временных рядов:
+\begin{itemize}
+	\item \emph{Целевые} временные ряды: временные ряды, которые нужно спрогнозировать,
+	
+	\item \emph{ковариаты}: это временные ряды, которые могут быть полезны при прогнозировании целевого временного ряда, но сами по себе не интересны с точки зрения прогноза. Иногда их еще называют внешними данными.
+\end{itemize}
+
+В свою очередь ковариаты разделяют на:
+\begin{itemize}
+	\item ковариаты <<прошлого времени>>: временные ряды, известные только в прошлом на момент построения прогноза. Это обычно \emph{измеренные} или \emph{наблюдаемые} временные ряды,
+	
+	\item ковариаты <<будущего времени>>: это временные ряды, значения которых известны и в будущем, на горизонте прогнозирования.
+\end{itemize}
+
+Какие-то модели поддерживают только ковариаты будущего времени, какие-то -- ковариаты только прошлого времени, а какие-то и те и другие. На текущий момент достаточно знать, что:
+\begin{itemize}
+	\item \verb|BlockRNNModel|, \verb|TCNModel|, \verb|NBEATSModel| и \verb|TransformerModel| поддерживают только ковариаты прошлого времени \verb|past_covariates|,
+	
+	\item \verb|RNNModel| использует ковариаты будущего времени \verb|future_covariates|.
+\end{itemize}
+
+Все модели, описанные выше поддерживают обучение на \emph{панельных} временных рядах (то есть на последовательности временных рядов). Кроме того они поддерживают и \emph{многомерные} временные ряды.
+
+Модели, поддерживающие ковариаты прошлого времени следуют <<блочной>> архитектуре. В основе этих моделей лежит нейронная сеть, которая принимает фрагмент (chunk) временного ряда как вход, и возвращает фрагменты прогнозов (outputs chunks) (\pic{fig:block_arch}). 
+
+\begin{figure}[h]
+	\centering
+	\includegraphics[scale=0.9 ]{figures/block_arch.png}
+	\caption{ Схема обучения модели и построения прогноза на фрагментах временного ряда. \texttt{input\_chunk\_length=4}, \texttt{output\_chunk\_length=2} }\label{fig:block_arch}
+\end{figure}
+
+Нужно указать следующие параметры:
+\begin{itemize}
+	\item \verb|input_chunk_length|: это длина окна обратного просмотра (lookback window),
+	
+	\item \verb|output_chunk_length|: длина выхода (прогноза), подготовленного внутренней моделью. Однако, метод \verb|predict()| <<внешней>> модели Darts (например, \verb|NBEATSModel|, \verb|TCNModel| etc.) могжет быть вызван и для горизонта большей длинны. В этом случае \verb|predict()| вызывается для горизонта прогнозирования длины большей, чем \verb|output_chunk_length| и внутренняя модель просто вызывается нескольок раз подряд, используя свои собственные прогнозы.
+\end{itemize}
+
+Рассмотрим пример. Модель смотрит на 2 года в прошлое и строит прогноз на 1 год вперед
+\begin{lstlisting}[
+style = ironpython,
+numbers = none
+]
+model_air = NBEATSModel(
+    input_chunk_length=24,  # 24 points lookback window
+    output_chunk_length=12,  # predicts next 12 points
+    n_epochs=200,
+    random_state=0,
+)
+
+model_air.fit(train_air, verbose=True)
+\end{lstlisting}
+
+Затем можно вызвать метод \verb|predict()|. Как отмечалось выше, мы можем вызвать метод \verb|predict()| на горизонте, длина которого превышает выход модели \verb|output_chunk_length=12|. В этом случае внутренняя модель будет вызываться на своих же прогнозах. Получается, что в этом примере модель будет вызывать трижды (так как \verb|n=36|)
+\begin{lstlisting}[
+style = ironpython,
+numbers = none
+]
+pred = model_air.predict(n=36)
+
+series_air_scaled.plot(label="actual")
+pred.plot(label="forecast")
+plt.legend()
+print("MAPE = {:.2f}%".format(mape(series_air_scaled, pred)))
+\end{lstlisting}
+
+\paragraph{Что происходит под капотом?} Чтобы обучить внутреннюю нейронную сеть, Darts сначала строит набор данных <<вход / выход>>.
+
+По умолчанию, \verb|NBEATSModel| создает экземпляр \verb|darts.utils.data.PastCovariatesSequentialDataset|, который просто строит все пары <<вход / выход>> фрагментов.
+
+Таким образом, в данном случае для временного ряда длины \verb|N| получится (\verb|N| - \verb|input_chunk_length| - \verb|output_chunk_length| + 1) экземпляров. В этом игрушечном примере \verb|input_chunk_lenght=4|, \verb|output_chunk_length=2| и потому получается $ K = 9 $ \emph{обучающих экземпляров}. Эпоха означает полный проход по всем экземплярам обучающего набора данных.
+
+ВАЖНО! Разные модели поддерживают различные наборы данных по умолчанию. Например, \verb|darts.utils.data.HorizonBasedDataset| представляет экземпляры, расположенные ближе к концу временного ряда или возможно полностью игнорирующие начало временного ряда.
+
+Если есть необходимость управлять обучающим набором, то можно реализовать свой собственный класс обучающего набора, унаследовав от абстрактного класса
+
+\verb|darts.utils.data.TrainingDataset|.
+
+Таким образом, можно реализовать отложенную загрузку данных, которая не требует загрузки всего набора данных в память за раз. После чего можно вызвать метод \verb|fit_from_dataset()|, который поддерживает любая глобальная модель.
+
+\paragraph{Обучение модели на панельных временных рядах} При обучении на панельных временных рядах (\pic{fig:panel_ts}) следует имееть в виду, что:
+\begin{itemize}
+	\item Различные временные ряды не обязаны иметь одну и ту же длину, или разделять одни и те же временные метки,
+	
+	\item Фактически, они могут даже иметь различные частоты.
+\end{itemize}
+
+\begin{figure}[h]
+	\centering
+	\includegraphics[scale=0.9 ]{figures/panel_ts.png}
+	\caption{ Схема обучения модели и построения прогноза на фрагментах панельного временного ряда. \texttt{input\_chunk\_length=4}, \texttt{output\_chunk\_length=2} }\label{fig:panel_ts}
+\end{figure}
+
+Пример обучения модели на панельных временных рядах
+\begin{lstlisting}[
+style = ironpython,
+numbers = none
+]
+model_air_milk = NBEATSModel(
+    input_chunk_length=24,
+    output_chunk_length=12,
+    n_epochs=100,
+    random_state=0
+)
+
+model_air_milk.fit(
+    [train_air, train_milk],  # list of series
+    verbose=True,
+)
+\end{lstlisting}
+
+Теперь (когда модель обучается на последовательности временных рядов) нужно указать для какого временного требуется построить прогноз. Пусть требуется построить прогноз для пассажиров. В этом случае \verb|series=train_air|
+\begin{lstlisting}[
+style = ironpython,
+numbers = none
+]
+pred = model_air_milk.predict(n=36, series=train_air)
+
+series_air_scaled.plot(label="actual")
+pred.plot(label="forecast")
+plt.legend()
+print("MAPE = {:.2f}%".format(mape(series_air_scaled, pred)))
+\end{lstlisting}
+
+Можно построить прогноз и для нескольких фрагментов временного ряда
+\begin{lstlisting}[
+style = ironpython,
+numbers = none
+]
+pred_list = model_air_milk.predict(n=36, series=[train_air, train_milk])
+for series, label in zip(pred_list, ["air passengers", "milk production"]):
+series.plot(label=f"forecast {label}")
+plt.legend();
+\end{lstlisting}
+
+Как отмечалось выше, глобальные модели в Darts поддерживают ковариаты. Вот простой пример
+\begin{lstlisting}[
+style = ironpython,
+numbers = none
+]
+# build year and month series:
+air_year = datetime_attribute_timeseries(series_air_scaled, attribute="year")
+air_month = datetime_attribute_timeseries(series_air_scaled, attribute="month")
+
+milk_year = datetime_attribute_timeseries(series_milk_scaled, attribute="year")
+milk_month = datetime_attribute_timeseries(series_milk_scaled, attribute="month")
+
+# stack year and month to obtain series of 2 dimensions (year and month):
+air_covariates = air_year.stack(air_month)
+milk_covariates = milk_year.stack(milk_month)
+
+# scale them between 0 and 1:
+scaler_dt_air = Scaler()
+air_covariates = scaler_dt_air.fit_transform(air_covariates)
+
+scaler_dt_milk = Scaler()
+milk_covariates = scaler_dt_milk.fit_transform(milk_covariates)
+
+# split in train/validation sets:
+air_train_covariates, air_val_covariates = air_covariates[:-36], air_covariates[-36:]
+milk_train_covariates, milk_val_covariates = (
+	milk_covariates[:-36],
+	milk_covariates[-36:],
+)
+
+# plot the covariates:
+plt.figure()
+air_covariates.plot()
+plt.title("Air traffic covariates (year and month)")
+
+plt.figure()
+milk_covariates.plot()
+plt.title("Milk production covariates (year and month)");
+\end{lstlisting}
+
+В данном случае ковариаты (месяц и год) представляют собой многомерные временные ряды. Обучение с ковариатами
+\begin{lstlisting}[
+style = ironpython,
+numbers = none
+]
+model_pastcov = BlockRNNModel(
+	model="LSTM",
+	input_chunk_length=24,
+	output_chunk_length=12,
+	n_epochs=100,
+	random_state=0,
+)
+
+model_pastcov.fit(
+	series=[train_air, train_milk],
+	past_covariates=[air_train_covariates, milk_train_covariates],
+	verbose=False,
+);
+\end{lstlisting}
+
+Построение прогноза с ковариатами
+\begin{lstlisting}[
+style = ironpython,
+numbers = none
+]
+pred_cov = model_pastcov.predict(
+    n=36,
+    series=train_air,
+    past_covariates=air_covariates
+)
+
+series_air_scaled.plot(label="actual")
+pred_cov.plot(label="forecast")
+plt.legend();
+\end{lstlisting}
+
+Обратное тестирование (backtesting) с ковариатами. Пусть требуется построить прогноз на 12 месяцев, начиная с 60\% точек временного ряда
+\begin{lstlisting}[
+style = ironpython,
+numbers = none
+]
+backtest_pastcov = model_pastcov.historical_forecasts(
+	series_air_scaled,  # временной ряд целиком
+	past_covariates=air_covariates,  # ковариаты целиком
+	start=0.6,
+	forecast_horizon=12,
+	stride=1,
+	retrain=False,
+)
+
+print(
+	"MAPE (BlockRNNModel with past covariates) = {:.2f}%".format(
+		mape(series_air_scaled, backtest_pastcov)
+	)
+)
+
+backtest_futcov = model_futcov.historical_forecasts(
+	series_air_scaled,
+	future_covariates=air_covariates,
+	start=0.6,
+	forecast_horizon=12,
+	stride=1,
+	retrain=False,
+)
+
+print(
+	"MAPE (RNNModel with future covariates) = {:.2f}%".format(
+		mape(series_air_scaled, backtest_futcov)
+	)
+)
+\end{lstlisting}
+
+\paragraph{Обучение и прогнозирование многомерных временных рядов} Пример энергопотребления
+\begin{lstlisting}[
+style = ironpython,
+numbers = none
+]
+multi_serie_elec = ElectricityDataset().load()
+
+# retaining only three components in different ranges
+retained_components = ["MT_002", "MT_008", "MT_009"]
+multi_serie_elec = multi_serie_elec[retained_components]
+# resampling the multivariate time serie
+multi_serie_elec = multi_serie_elec.resample(freq="1H")
+# keep the values for the last 5 days
+multi_serie_elec = multi_serie_elec[-168:]
+\end{lstlisting}
+
+Разбиваем на обучающий и валидационный поднаборы, приводим к диапазону от 0 до 1 и строим прогноз
+\begin{lstlisting}[
+style = ironpython,
+numbers = none
+]
+# split in train/validation sets
+training_set, validation_set = multi_serie_elec[:-24], multi_serie_elec[-24:]
+
+# define a scaler, by default, normalize each component between 0 and 1
+scaler_dataset = Scaler()
+# scaler is fit on training set only to avoid leakage
+training_scaled = scaler_dataset.fit_transform(training_set)
+validation_scaled = scaler_dataset.transform(validation_set)
+
+
+def fit_and_pred(model, training, validation):
+	model.fit(training)
+	forecast = model.predict(len(validation))
+	return forecast
+\end{lstlisting}
+
+Определяем модели \verb|VARIMA| и \verb|RNNModel| и строим прогноз
+\begin{lstlisting}[
+style = ironpython,
+numbers = none
+]
+model_VARIMA = VARIMA(p=12, d=0, q=0, trend="n")
+
+model_GRU = RNNModel(
+	input_chunk_length=24,
+	model="LSTM",
+	hidden_dim=25,
+	n_rnn_layers=3,
+	training_length=36,
+	n_epochs=200,
+)
+
+# training and prediction with the VARIMA model
+forecast_VARIMA = fit_and_pred(model_VARIMA, training_scaled, validation_scaled)
+print("MAE (VARIMA) = {:.2f}".format(mae(validation_scaled, forecast_VARIMA)))
+
+# training and prediction with the RNN model
+forecast_RNN = fit_and_pred(model_GRU, training_scaled, validation_scaled)
+print("MAE (RNN) = {:.2f}".format(mae(validation_scaled, forecast_RNN)))
+\end{lstlisting}
+
+Прогнозы нужно привести к оригинальному диапазону
+\begin{lstlisting}[
+style = ironpython,
+numbers = none
+]
+forecast_VARIMA = scaler_dataset.inverse_transform(forecast_VARIMA)
+forecast_RNN = scaler_dataset.inverse_transform(forecast_RNN)
+
+labels = [f"forecast {component}" for component in retained_components]
+fig, axs = plt.subplots(1, 2, figsize=(14, 6))
+validation_set.plot(ax=axs[0])
+forecast_VARIMA.plot(label=labels, ax=axs[0])
+axs[0].set_ylim(0, 500)
+axs[0].set_title("VARIMA model forecast")
+axs[0].legend(loc="upper left")
+
+validation_set.plot(ax=axs[1])
+forecast_RNN.plot(label=labels, ax=axs[1])
+axs[1].set_ylim(0, 500)
+axs[1].set_title("RNN model forecast")
+axs[1].legend(loc="upper left")
+plt.show()
+\end{lstlisting}
+
+Для того чтобы поднять качество \verb|VARIMA|, можно учесть дневную сезонность \verb|p=24|.
+
+
+
+
 
 
 
@@ -3863,12 +4267,66 @@ Optuna предлагает следующие алгоритмы подрезк
 	\item Алгоритм подрезки по порогу \verb|ThresholdPruner|.
 \end{itemize}
 
+В документации говорится, что для включения пранера нужно вызывать \verb|report()| и \verb|should_prune()| после каждого шага обучения. \verb|report()| периодически мониторит промежуточные значения, а \verb|should_prune()| принимает решение об остановке триала
+\begin{lstlisting}[
+style = ironpython,
+numbers = none
+]
+import logging
+import sys
+
+import sklearn.datasets
+import sklearn.linear_model
+import sklearn.model_selection
+
+
+def objective(trial):
+	iris = sklearn.datasets.load_iris()
+	classes = list(set(iris.target))
+	train_x, valid_x, train_y, valid_y = sklearn.model_selection.train_test_split(
+	iris.data, iris.target, test_size=0.25, random_state=0
+	)
+
+	alpha = trial.suggest_float("alpha", 1e-5, 1e-1, log=True)
+	clf = sklearn.linear_model.SGDClassifier(alpha=alpha)
+
+	for step in range(100):
+		clf.partial_fit(train_x, train_y, classes=classes)
+		
+		# Report intermediate objective value.
+		intermediate_value = 1.0 - clf.score(valid_x, valid_y)
+		trial.report(intermediate_value, step)
+		
+		# Handle pruning based on the intermediate value.
+		if trial.should_prune():
+			raise optuna.TrialPruned()
+		
+		return 1.0 - clf.score(valid_x, valid_y)
+\end{lstlisting}
+
+Остановка по медиане
+\begin{lstlisting}[
+style = ironpython,
+numbers = none
+]
+# Add stream handler of stdout to show the messages
+optuna.logging.get_logger("optuna").addHandler(logging.StreamHandler(sys.stdout))
+study = optuna.create_study(pruner=optuna.pruners.MedianPruner())
+study.optimize(objective, n_trials=20)
+\end{lstlisting}
+
+{\color{red}
+ВАЖНО! Получается, что с библиотеками, которые Optuna не поддерживает (например, PySCIPOpt), пранеры из коробки не работают и нужно писать ручную обвязку с \verb|trial.should_prune()|. То есть не достаточно при создании экземпляра сессии исслеодования \verb|study| просто указать нужный экземпляр пранера. А вот с популярными библиотеками (например, LightGBM, XGBoost etc.) пранеры работают из коробки. Нужно просто указать соответствующий пранер в \verb|study|, а в функции \verb|objective()| передать в модель (скажем, в XGBoost) экземпляр обратного вызова для подрезки \verb|optutna.integration.XGBoostPruningCallback|
+}
+
 Для задач, не связанных с глубоким обучением, эффективнее всего следующие пары <<алгоритм выборки -- алгоритм подрезки>>:
 \begin{itemize}
 	\item Для \verb|RandomSampler|, лучше \verb|MedianPruner|,
 	
 	\item Для \verb|TPESampler|, лучше \verb|HyperbandPruner|.
 \end{itemize}
+
+
 
 Для XGBoost использовать подрезку проще всего с помощью 
 
