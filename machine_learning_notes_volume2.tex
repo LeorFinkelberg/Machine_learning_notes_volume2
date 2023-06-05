@@ -2046,6 +2046,935 @@ plt.show()
 
 Для того чтобы поднять качество \verb|VARIMA|, можно учесть дневную сезонность \verb|p=24|.
 
+\subsubsection{Преобразования над данными}
+
+Для заполнения пропусков можно воспольозваться классом \verb|MissingValuesFiller|
+\begin{lstlisting}[
+style = ironpython,
+numbers = none
+]
+incomplete_series = MonthlyMilkIncompleteDataset().load()  # данные с пропусками
+incomplete_series.plot()
+
+filler = MissingValuesFiller()
+# возвращается новое представление данных; то есть данные без пропусков
+filled = filler.transform(incomplete_series, method="quadratic")
+
+filled.plot()
+\end{lstlisting}
+
+Разные месяцы содержат неодинаковое количество дней. В результате чего временной ряд получается сложным. Чтобы его упростить предлагается каждый месяц разделить на количество дней в месяце с помощью класса \verb|InvertibleMapper|
+\begin{lstlisting}[
+style = ironpython,
+numbers = none
+]
+# Transform the time series
+toDailyAverage = InvertibleMapper(
+	fn=lambda timestamp, x: x / timestamp.days_in_month,
+	inverse_fn=lambda timestamp, x: x * timestamp.days_in_month,
+)
+
+dailyAverage = toDailyAverage.transform(series)
+
+dailyAverage.plot()
+\end{lstlisting}
+
+Делаем прогноз на 36 точек вперед
+\begin{lstlisting}[
+style = ironpython,
+numbers = none
+]
+# Make a forecast
+dailyavg_train, dailyavg_val = dailyAverage.split_after(pd.Timestamp("1973-01-01"))
+
+model = ExponentialSmoothing()
+model.fit(dailyavg_train)
+dailyavg_forecast = model.predict(36)
+
+plt.title("MAPE = {:.2f}%".format(mape(dailyavg_forecast, dailyavg_val)))
+dailyAverage.plot()
+dailyavg_forecast.plot()
+plt.legend()
+\end{lstlisting}
+
+Обращаем преобразование
+\begin{lstlisting}[
+style = ironpython,
+numbers = none
+]
+# Inverse the transformation
+# Here the forecast is stochastic; so we take the median value
+forecast = toDailyAverage.inverse_transform(dailyavg_forecast)
+
+plt.title("MAPE = {:.2f}%".format(mape(forecast, validation)))
+series.plot(label="actual")
+forecast.plot(label="forecast")
+plt.legend()
+\end{lstlisting}
+
+Преобразования можно собирать в цепочки с помощью \verb|Pipeline|
+\begin{lstlisting}[
+style = ironpython,
+numbers = none
+]
+from darts.dataprocessing import Pipeline
+
+pipeline = Pipeline([toDailyAverage, scaler])
+transformed = pipeline.fit_transform(training)
+transformed.plot()
+
+back = pipeline.inverse_transform(transformed)
+back.plot()
+\end{lstlisting}
+
+Если цепочка обратных преобразований включает необратимые преобразования (например, \verb|MissingValuesFiller|), то нужно просто в \verb|inverse_transform()| выставить \verb|partial=True|
+\begin{lstlisting}[
+style = ironpython,
+numbers = none
+]
+back = pipeline.inverse_transform(transformed, partial=True)
+\end{lstlisting}
+
+Для ускорения вычислений можно выставить \verb|n_jobjs=-1|
+\begin{lstlisting}[
+style = ironpython,
+numbers = none
+]
+# setting n_jobs to -1 will make the library using all the cores available in the machine
+scaler = Scaler(verbose=True, n_jobs=-1, name="Faster")
+scaler.fit(huge_number_of_series)
+back = scaler.transform(huge_number_of_series)
+\end{lstlisting}
+
+\subsubsection{Статические ковариаты}
+
+Модели Darts будут учитывать только статические ковариаты, привязанные к целевому временному ряду. Определить статические ковариаты можно так
+\begin{lstlisting}[
+style = ironpython,
+numbers = none
+]
+# arbitrary continuous and categorical static covariates (single row)
+static_covs_single = pd.DataFrame(data={"cont": [0], "cat": ["a"]})
+print(static_covs_single)
+
+# multivariate static covariates (multiple components). note that the number of rows matches the number of components of `series`
+static_covs_multi = pd.DataFrame(data={"cont": [0, 2, 1], "cat": ["a", "c", "b"]})
+print(static_covs_multi)
+\end{lstlisting}
+
+Добавить статические ковариаты к существующему \verb|TimeSeries| можно так
+\begin{lstlisting}[
+style = ironpython,
+numbers = none
+]
+series_single = series.with_static_covariates(static_covs_single)
+series_multi = series.with_static_covariates(static_covs_multi)
+\end{lstlisting}
+
+Статические ковариаты можно добавить и при создании экземпляра \verb|TimeSeries|
+\begin{lstlisting}[
+style = ironpython,
+numbers = none
+]
+# add arbitrary continuous and categorical static covariates
+series = TimeSeries.from_values(
+	values=np.random.random((10, 3)),
+	columns=["comp1", "comp2", "comp3"],
+	static_covariates=static_covs_multi,
+)
+print(series.static_covariates)
+\end{lstlisting}
+
+Статические ковариаты полезны только, если мы их используем с несколькими временными рядами
+\begin{lstlisting}[
+style = ironpython,
+numbers = none
+]
+first_series = series.with_static_covariates(
+	pd.DataFrame(data={"ID": ["SERIES1"], "var1": [0.5]})
+)
+second_series = series.with_static_covariates(
+	pd.DataFrame(data={"ID": ["SERIES2"], "var1": [0.75]})
+)
+
+print("Valid static covariates for multiple series")
+print(first_series.static_covariates)
+print(second_series.static_covariates)
+
+series_multi = [first_series, second_series]
+"""
+Valid static covariates for multiple series
+static_covariates       ID  var1
+global_components  SERIES1   0.5
+static_covariates       ID  var1
+global_components  SERIES2  0.75
+"""
+\end{lstlisting}
+
+Если есть кадр данных, в котором временные ряды склеены вертикально, то с ним можно работать так
+\begin{lstlisting}[
+style = ironpython,
+numbers = none
+]
+# generate an DataFrame example
+df = pd.DataFrame(
+	data={
+		"dates": [
+		"2020-01-01",
+		"2020-01-02",
+		"2020-01-03",
+		"2020-01-01",
+		"2020-01-02",
+		"2020-01-03",
+		],
+		"comp1": np.random.random((6,)),
+		"comp2": np.random.random((6,)),
+		"comp3": np.random.random((6,)),
+		"ID": ["SERIES1", "SERIES1", "SERIES1", "SERIES2", "SERIES2", "SERIES2"],
+		"var1": [0.5, 0.5, 0.5, 0.75, 0.75, 0.75],
+	}
+)
+print("Input DataFrame")
+print(df)
+
+series_multi = TimeSeries.from_group_dataframe(
+	df,
+	time_col="dates",
+	group_cols="ID",  # individual time series are extracted by grouping `df` by `group_cols`
+	static_cols=[
+		"var1"
+	],  # also extract these additional columns as static covariates (without grouping)
+	value_cols=[
+		"comp1",
+		"comp2",
+		"comp3",
+	],  # optionally, specify the time varying columns
+)
+
+print(f"\n{len(series_multi)} series were extracted from the input DataFrame")
+for i, ts in enumerate(series_multi):
+	print(f"Static covariates of series {i}")
+	print(ts.static_covariates)
+	ts["comp1"].plot(label=f"comp1_series_{i}")
+\end{lstlisting}
+
+\subsubsection{Переносимое обучение для временных рядов}
+
+Для загрузки наборов предлагаются следующие вспомогательные функции
+\begin{lstlisting}[
+style = ironpython,
+numbers = none
+]
+def load_m3() -> Tuple[List[TimeSeries], List[TimeSeries]]:
+	print("building M3 TimeSeries...")
+	
+	# Read DataFrame
+	df_m3 = pd.read_excel("m3_dataset.xls", "M3Month")
+	
+	# Build TimeSeries
+	m3_series = []
+	for row in tqdm(df_m3.iterrows()):
+		s = row[1]
+		start_year = int(s["Starting Year"])
+		start_month = int(s["Starting Month"])
+		values_series = s[6:].dropna()
+		if start_month == 0:
+		continue
+		
+		start_date = datetime(year=start_year, month=start_month, day=1)
+		time_axis = pd.date_range(start_date, periods=len(values_series), freq="M")
+		series = TimeSeries.from_times_and_values(
+		time_axis, values_series.values
+		).astype(np.float32)
+		m3_series.append(series)
+
+	print("\nThere are {} monthly series in the M3 dataset".format(len(m3_series)))
+
+	# Split train/test
+	print("splitting train/test...")
+	m3_train = [s[:-HORIZON] for s in m3_series]
+	m3_test = [s[-HORIZON:] for s in m3_series]
+	
+	# Scale so that the largest value is 1
+	print("scaling...")
+	scaler_m3 = Scaler(scaler=MaxAbsScaler())
+	m3_train_scaled: List[TimeSeries] = scaler_m3.fit_transform(m3_train)
+	m3_test_scaled: List[TimeSeries] = scaler_m3.transform(m3_test)
+	
+	print(
+		"done. There are {} series, with average training length {}".format(
+			len(m3_train_scaled), np.mean([len(s) for s in m3_train_scaled])
+		)
+	)
+	return m3_train_scaled, m3_test_scaled
+
+
+def load_air() -> Tuple[List[TimeSeries], List[TimeSeries]]:
+	# load TimeSeries
+	print("loading air TimeSeries...")
+	with open("passengers.pkl", "rb") as f:
+		all_air_series = pickle.load(f)
+
+	# Split train/test
+	print("splitting train/test...")
+	air_train = [s[:-HORIZON] for s in all_air_series]
+	air_test = [s[-HORIZON:] for s in all_air_series]
+	
+	# Scale so that the largest value is 1
+	print("scaling series...")
+	scaler_air = Scaler(scaler=MaxAbsScaler())
+	air_train_scaled: List[TimeSeries] = scaler_air.fit_transform(air_train)
+	air_test_scaled: List[TimeSeries] = scaler_air.transform(air_test)
+
+	print(
+		"done. There are {} series, with average training length {}".format(
+			len(air_train_scaled), np.mean([len(s) for s in air_train_scaled])
+		)
+	)
+	return air_train_scaled, air_test_scaled
+
+
+def load_m4() -> Tuple[List[TimeSeries], List[TimeSeries]]:
+	# load TimeSeries - the splitting and scaling has already been done
+	print("loading M4 TimeSeries...")
+	with open("m4_monthly_scaled.pkl", "rb") as f:
+		m4_series = pickle.load(f)
+
+	# filter and keep only series that contain at least 48 training points
+	m4_series = list(filter(lambda t: len(t[0]) >= 48, m4_series))
+	
+	m4_train_scaled, m4_test_scaled = zip(*m4_series)
+	
+	print(
+		"done. There are {} series, with average training length {}".format(
+			len(m4_train_scaled), np.mean([len(s) for s in m4_train_scaled])
+		)
+	)
+	return m4_train_scaled, m4_test_scaled
+\end{lstlisting}
+
+Для упрощения вычисления прогнозов напишем функцию
+\begin{lstlisting}[
+style = ironpython,
+numbers = none
+]
+def eval_local_model(
+	train_series: List[TimeSeries],
+	test_series: List[TimeSeries],
+	model_cls,
+	**kwargs
+) -> Tuple[List[float], float]:
+    """
+    Локальная модель
+    """
+	preds = []
+	start_time = time.time()
+	for series in tqdm(train_series):
+		model = model_cls(**kwargs)
+		model.fit(series)  # обучается на фрагментах временного ряда
+		pred = model.predict(n=HORIZON)
+		preds.append(pred)
+	elapsed_time = time.time() - start_time
+	
+	smapes = eval_forecasts(preds, test_series)
+	return smapes, elapsed_time
+\end{lstlisting}
+
+Обычно рекомендуется в качестве первого шага посмотреть как себя ведет очень простая модель, просто повторяющая последнее значение
+\begin{lstlisting}[
+style = ironpython,
+numbers = none
+]
+naive1_smapes, naive1_time = eval_local_model(air_train, air_test, NaiveSeasonal, K=1)
+\end{lstlisting}
+
+Затем можно выяснить какие оценки даст ARIMA, например
+\begin{lstlisting}[
+style = ironpython,
+numbers = none
+]
+warnings.filterwarnings("ignore")  # ARIMA generates lots of warnings
+arima_smapes, arima_time = eval_local_model(air_train, air_test, ARIMA, p=12, d=1, q=1)
+\end{lstlisting}
+
+Теперь можно обратиться к <<\emph{глобальным моделям}>>, которые обучаются на последовательности временных рядов \emph{за один раз}. Darts поддерживает два вида глобальных моделей:
+\begin{itemize}
+	\item \verb|RegressionModels|, которые представляют собой обертки,
+	
+	\item Модели на базе PyTorch, которые предлагают различные модели глубокого обучения.
+\end{itemize}
+
+Обе группы моделей могут обучаться на нескольких временных рядах путем <<табуляризации>> данных. Вспомогательная функция
+\begin{lstlisting}[
+style = ironpython,
+numbers = none
+]
+def eval_global_model(
+	train_series: List[TimeSeries],
+	test_series: List[TimeSeries],
+	model_cls,
+	**kwargs
+) -> Tuple[List[float], float]:
+    """
+    Глобальная модель
+    """
+	start_time = time.time()
+	
+	model = model_cls(**kwargs)
+	model.fit(train_series)  # обучается на всей последовательности разом
+	preds = model.predict(n=HORIZON, series=train_series)
+	
+	elapsed_time = time.time() - start_time
+	
+	smapes = eval_forecasts(preds, test_series)
+	return smapes, elapsed_time
+\end{lstlisting}
+
+\verb|RegressionModel| в Darts это прогностические модели, которые могут быть обернуты над любой совместимой с Scikit-learn регрессионной моделью. По сравнению с глубокими моделями, они имеют значительно меньше параметров и могут обучаться гораздо быстрее.
+
+Важные параметры \verb|lags| и \verb|output_chunk_length|. Например \verb|lags=24| и \verb|output_chunk_length=12| означают, что модель будет использовать последние 24 лага, чтобы предсказать следующие 12. Для примера рассмотрим
+\begin{lstlisting}[
+style = ironpython,
+numbers = none
+]
+lr_smapes, lr_time = eval_global_model(
+    air_train,
+    air_test,
+    LinearRegressionModel,
+    lags=30,
+    output_chunk_length=1
+)
+\end{lstlisting}
+
+Или LightGBM
+\begin{lstlisting}[
+style = ironpython,
+numbers = none	
+]
+lgbm_smapes, lgbm_time = eval_global_model(
+	air_train,
+	air_test,
+	LightGBMModel,
+	lags=35,
+	output_chunk_length=1,
+	objective="mape"
+)
+\end{lstlisting}
+
+Тепеь рассмотрим глубокие модели
+\begin{lstlisting}[
+style = ironpython,
+numbers = none
+]
+### Possible N-BEATS hyper-parameters
+
+# Slicing hyper-params:
+IN_LEN = 30
+OUT_LEN = 4
+
+# Architecture hyper-params:
+NUM_STACKS = 20
+NUM_BLOCKS = 1
+NUM_LAYERS = 2
+LAYER_WIDTH = 136
+COEFFS_DIM = 11
+
+# Training settings:
+LR = 1e-3
+BATCH_SIZE = 1024
+MAX_SAMPLES_PER_TS = 10
+NUM_EPOCHS = 10
+\end{lstlisting}
+
+Теперь построим, обучим глубокую модель и сделаем прогноз
+\begin{lstlisting}[
+style = ironpython,
+numbers = none
+]
+# reproducibility
+np.random.seed(42)
+torch.manual_seed(42)
+
+start_time = time.time()
+
+nbeats_model_air = NBEATSModel(
+	input_chunk_length=IN_LEN,
+	output_chunk_length=OUT_LEN,
+	num_stacks=NUM_STACKS,
+	num_blocks=NUM_BLOCKS,
+	num_layers=NUM_LAYERS,
+	layer_widths=LAYER_WIDTH,
+	expansion_coefficient_dim=COEFFS_DIM,
+	loss_fn=SmapeLoss(),
+	batch_size=BATCH_SIZE,
+	optimizer_kwargs={"lr": LR},
+	# remove this one if your notebook does run in a GPU environment:
+	pl_trainer_kwargs={
+		"enable_progress_bar": True,
+		"accelerator": "gpu",
+		"gpus": -1,
+		"auto_select_gpus": True,
+	},
+)
+
+nbeats_model_air.fit(air_train, num_loader_workers=4, epochs=NUM_EPOCHS)
+
+# get predictions
+nb_preds = nbeats_model_air.predict(series=air_train, n=HORIZON)
+nbeats_elapsed_time = time.time() - start_time
+
+nbeats_smapes = eval_forecasts(nb_preds, air_test)
+\end{lstlisting}
+
+{\color{blue}Линейные модели \verb|LInearRegressionModel| часто дают неплохое решение!} Глубокие модели часто работают гораздо лучше на больших наборах данных. Попробуем тогда глубокие модели на наборе с 48 000 фрагментами. Учитывая, что в среднейм каждый фрагмент содержит 200 временных шагов, то в итоге мы получим 10 млн. обучающих экземпляров
+\begin{lstlisting}[
+style = ironpython,
+numbers = none
+]
+m4_train, m4_test = load_m4()
+\end{lstlisting}
+
+При таком количестве экземпляров эпоха занимала бы слишком много времени. Поэтому приходится ограничиваться небольшим числом экземпляров на один фрагмент \verb|max_samples_per_ts|
+\begin{lstlisting}[
+style = ironpython,
+numbers = none
+]
+# Slicing hyper-params:
+IN_LEN = 36
+OUT_LEN = 4
+
+# Architecture hyper-params:
+NUM_STACKS = 20
+NUM_BLOCKS = 1
+NUM_LAYERS = 2
+LAYER_WIDTH = 136
+COEFFS_DIM = 11
+
+# Training settings:
+LR = 1e-3
+BATCH_SIZE = 1024
+MAX_SAMPLES_PER_TS = (
+	10  # <-- new parameter, limiting the number of training samples per series
+)
+NUM_EPOCHS = 5
+\end{lstlisting}
+
+\begin{lstlisting}[
+style = ironpython,
+numbers = none
+]
+# reproducibility
+np.random.seed(42)
+torch.manual_seed(42)
+
+nbeats_model_m4 = NBEATSModel(
+	input_chunk_length=IN_LEN,
+	output_chunk_length=OUT_LEN,
+	batch_size=BATCH_SIZE,
+	num_stacks=NUM_STACKS,
+	num_blocks=NUM_BLOCKS,
+	num_layers=NUM_LAYERS,
+	layer_widths=LAYER_WIDTH,
+	expansion_coefficient_dim=COEFFS_DIM,
+	loss_fn=SmapeLoss(),
+	optimizer_kwargs={"lr": LR},
+	pl_trainer_kwargs={
+		"enable_progress_bar": True,
+		"accelerator": "gpu",
+		"gpus": -1,
+		"auto_select_gpus": True,
+	},
+)
+
+# Train
+nbeats_model_m4.fit(
+	m4_train,
+	num_loader_workers=4,
+	epochs=NUM_EPOCHS,
+	max_samples_per_ts=MAX_SAMPLES_PER_TS,
+)
+\end{lstlisting}
+
+Теперь модель, обченную на наборе M4, можно применить к другому набору (air) -- \emph{трансферное обучение}
+\begin{lstlisting}[
+style = ironpython,
+numbers = none
+]
+preds = nbeats_model_m4.predict(series=air_train, n=HORIZON)  # get forecasts
+nbeats_m4_smapes = eval_forecasts(preds, air_test)
+\end{lstlisting}
+
+Аналогичным образом можно обучить и другие глобальные модели и построить прогноз для набора air
+\begin{lstlisting}[
+style = ironpython,
+numbers = none
+]
+random.seed(42)
+
+lgbm_model_m4 = LightGBMModel(
+    lags=30,
+    output_chunk_length=1,
+    objective="mape"
+)
+lgbm_model_m4.fit(m4_train)
+
+tic = time.time()
+preds = lgbm_model_m4.predict(
+    n=HORIZON,
+    series=air_train
+)
+lgbm_time_transfer = time.time() - tic
+
+lgbm_smapes_transfer = eval_forecasts(preds, air_test)
+\end{lstlisting}
+
+\subsubsection{Подбор гиперпараметров. Задача прогнозирования электрической нагрузки}
+
+Набор данных \verb|darts.datasets.ElectricityDataset| содержит измерения потребления электроэнергии 370 пользователями (с 15-минутной частотой) (\pic{fig:electricity_dataset}).
+
+Оставим в расмотрении только последние 80 дней в каждом фрагменте
+
+\begin{lstlisting}[
+style = ironpython,
+numbers = none	
+]
+all_series = ElectricityDataset(multivariate=False).load()
+NR_DAYS = 80
+DAY_DURATION = 24 * 4  # 15 minutes frequency
+
+all_series_fp32 = [
+	s[-(NR_DAYS * DAY_DURATION) :].astype(np.float32) for s in tqdm(all_series)
+]
+\end{lstlisting}
+
+Последние 14 дней оставим под тест, а предыдущие 14 дней под валидацию (на них будем подбирать гиперпараметры)
+\begin{lstlisting}[
+style = ironpython,
+numbers = none
+]
+# Split in train/val/test
+val_len = 14 * DAY_DURATION  # 14 days
+
+train = [s[: -(2 * val_len)] for s in all_series_fp32]
+val = [s[-(2 * val_len) : -val_len] for s in all_series_fp32]
+test = [s[-val_len:] for s in all_series_fp32]
+
+# Scale so that the largest value is 1.
+# This way of scaling perserves the sMAPE
+scaler = Scaler(scaler=MaxAbsScaler())
+train = scaler.fit_transform(train)
+val = scaler.transform(val)
+test = scaler.transform(test)
+\end{lstlisting}
+
+\begin{figure}[h]
+	\centering
+	\includegraphics[scale=1.2 ]{figures/electricity_dataset.png}
+	\caption{ Некоторые фрагменты набора \texttt{ElectricityDataset} }\label{fig:electricity_dataset}
+\end{figure}
+
+Начнем с простой линейной модели без подбора гиперпараметров. Это будет baseline.
+
+ВАЖНО! Получение результатов, превосходящих результаты линейной модели, это не всегда тривиальная задача. Поэтому рекомендуется всегда начинать с простой модели.
+
+\begin{lstlisting}[
+style = ironpython,
+numbers = none
+]
+# здесь 7 * DAY_DURATION это ширина окна
+lr_model = LinearRegressionModel(lags=7 * DAY_DURATION)  # отступили на 7 дней в прошлое
+lr_model.fit(train);
+\end{lstlisting}
+
+Теперь построим простую модель TCN
+\begin{lstlisting}[
+style = ironpython,
+numbers = none
+]
+""" We write a function to build and fit a TCN Model, which we will re-use later.
+"""
+
+def build_fit_tcn_model(
+	in_len,
+	out_len,
+	kernel_size,
+	num_filters,
+	weight_norm,
+	dilation_base,
+	dropout,
+	lr,
+	include_dayofweek,
+	likelihood=None,
+	callbacks=None,
+):
+	# reproducibility
+	torch.manual_seed(42)
+	
+	# some fixed parameters that will be the same for all models
+	BATCH_SIZE = 1024
+	MAX_N_EPOCHS = 30
+	NR_EPOCHS_VAL_PERIOD = 1
+	MAX_SAMPLES_PER_TS = 1000
+	
+	# throughout training we'll monitor the validation loss for early stopping
+	early_stopper = EarlyStopping("val_loss", min_delta=0.001, patience=3, verbose=True)
+	if callbacks is None:
+		callbacks = [early_stopper]
+	else:
+		callbacks = [early_stopper] + callbacks
+
+	# detect if a GPU is available
+	if torch.cuda.is_available():
+		pl_trainer_kwargs = {
+			"accelerator": "gpu",
+			"gpus": -1,
+			"auto_select_gpus": True,
+			"callbacks": callbacks,
+		}
+		num_workers = 4
+	else:
+		pl_trainer_kwargs = {"callbacks": callbacks}
+		num_workers = 0
+
+	# optionally also add the day of the week (cyclically encoded) as a past covariate
+	encoders = {"cyclic": {"past": ["dayofweek"]}} if include_dayofweek else None
+
+	# build the TCN model
+	model = TCNModel(
+		input_chunk_length=in_len,
+		output_chunk_length=out_len,
+		batch_size=BATCH_SIZE,
+		n_epochs=MAX_N_EPOCHS,
+		nr_epochs_val_period=NR_EPOCHS_VAL_PERIOD,
+		kernel_size=kernel_size,
+		num_filters=num_filters,
+		weight_norm=weight_norm,
+		dilation_base=dilation_base,
+		dropout=dropout,
+		optimizer_kwargs={"lr": lr},
+		add_encoders=encoders,
+		likelihood=likelihood,
+		pl_trainer_kwargs=pl_trainer_kwargs,
+		model_name="tcn_model",
+		force_reset=True,
+		save_checkpoints=True,
+	)
+
+	# when validating during training, we can use a slightly longer validation
+	# set which also contains the first input_chunk_length time steps
+	model_val_set = scaler.transform(
+		[s[-((2 * val_len) + in_len) : -val_len] for s in all_series_fp32]
+	)
+
+	# train the model
+	model.fit(
+		series=train,
+		val_series=model_val_set,
+		max_samples_per_ts=MAX_SAMPLES_PER_TS,
+		num_loader_workers=num_workers,
+	)
+
+	# reload best model over course of training
+	model = TCNModel.load_from_checkpoint("tcn_model")
+
+	return model
+\end{lstlisting}
+
+\begin{lstlisting}[
+style = ironpython,
+numbers = none
+]
+model = build_fit_tcn_model(
+	in_len=7 * DAY_DURATION,
+	out_len=6 * DAY_DURATION,
+	kernel_size=5,
+	num_filters=5,
+	weight_norm=False,
+	dilation_base=2,
+	dropout=0.2,
+	lr=1e-3,
+	include_dayofweek=True,
+)
+\end{lstlisting}
+
+\begin{lstlisting}[
+style = ironpython,
+numbers = none
+]
+preds = model.predict(series=train, n=val_len)
+eval_model(preds, "First TCN model")
+\end{lstlisting}
+
+Подбор гиперпараметров с Optuna
+\begin{lstlisting}[
+style = ironpython,
+numbers = none
+]
+def objective(trial):
+	callback = [PyTorchLightningPruningCallback(trial, monitor="val_loss")]
+	
+	# set input_chunk_length, between 5 and 14 days
+	days_in = trial.suggest_int("days_in", 5, 14)
+	in_len = days_in * DAY_DURATION
+	
+	# set out_len, between 1 and 13 days (it has to be strictly shorter than in_len).
+	days_out = trial.suggest_int("days_out", 1, days_in - 1)
+	out_len = days_out * DAY_DURATION
+	
+	# Other hyperparameters
+	kernel_size = trial.suggest_int("kernel_size", 5, 25)
+	num_filters = trial.suggest_int("num_filters", 5, 25)
+	weight_norm = trial.suggest_categorical("weight_norm", [False, True])
+	dilation_base = trial.suggest_int("dilation_base", 2, 4)
+	dropout = trial.suggest_float("dropout", 0.0, 0.4)
+	lr = trial.suggest_float("lr", 5e-5, 1e-3, log=True)
+	include_dayofweek = trial.suggest_categorical("dayofweek", [False, True])
+
+	# build and train the TCN model with these hyper-parameters:
+	model = build_fit_tcn_model(
+		in_len=in_len,
+		out_len=out_len,
+		kernel_size=kernel_size,
+		num_filters=num_filters,
+		weight_norm=weight_norm,
+		dilation_base=dilation_base,
+		dropout=dropout,
+		lr=lr,
+		include_dayofweek=include_dayofweek,
+		callbacks=callback,
+	)
+
+	# Evaluate how good it is on the validation set
+	preds = model.predict(series=train, n=val_len)
+	smapes = smape(val, preds, n_jobs=-1, verbose=True)
+	smape_val = np.mean(smapes)
+	
+	return smape_val if smape_val != np.nan else float("inf")
+\end{lstlisting}
+
+И остается только
+\begin{lstlisting}[
+style = ironpython,
+numbers = none
+]
+def print_callback(study, trial):
+	print(f"Current value: {trial.value}, Current params: {trial.params}")
+	print(f"Best value: {study.best_value}, Best params: {study.best_trial.params}")
+
+
+study = optuna.create_study(direction="minimize")
+
+study.optimize(objective, timeout=7200, callbacks=[print_callback])
+
+# We could also have used a command as follows to limit the number of trials instead:
+# study.optimize(objective, n_trials=100, callbacks=[print_callback])
+
+# Finally, print the best value and best hyperparameters:
+print(f"Best value: {study.best_value}, Best params: {study.best_trial.params}")
+
+"""
+Best value: 14.720555851487694, Best params: {
+	'days_in': 14, 
+	days_out': 6,
+	'kernel_size': 19,
+	'num_filters': 19,
+	'weight_norm': True,
+	'dilation_base': 4,
+	'dropout': 0.07718156729165897,
+	'lr': 0.0008841998396117885,
+	'dayofweek': False
+}
+"""
+\end{lstlisting}
+
+Получив наилучшую комбинацию параметров, обучим модель еще раз, но этот раз это будет вероятностная моель
+\begin{lstlisting}[
+style = ironpython,
+numbers = none
+]
+best_model = build_fit_tcn_model(
+	in_len=14 * DAY_DURATION,
+	out_len=6 * DAY_DURATION,
+	kernel_size=19,
+	num_filters=19,
+	weight_norm=True,
+	dilation_base=4,
+	dropout=0.0772,
+	lr=0.0008842,
+	likelihood=GaussianLikelihood(),  # <- NB
+	include_dayofweek=False,
+)
+\end{lstlisting}
+
+Строим прогноз
+\begin{lstlisting}[
+style = ironpython,
+numbers = none
+]
+best_preds = best_model.predict(
+	series=train, n=val_len, num_samples=100, mc_dropout=True
+)
+eval_model(best_preds, "best model, probabilistic")
+\end{lstlisting}
+
+Теперь посмотрим как ведет себя модель на тестовом поднаборе
+\begin{lstlisting}[
+style = ironpython,
+numbers = none	
+]
+train_val_set = scaler.transform([s[:-val_len] for s in all_series_fp32])
+
+best_preds_test = best_model.predict(
+	series=train_val_set, n=val_len, num_samples=100, mc_dropout=True
+)
+
+eval_model(
+	best_preds_test,
+	"best model, probabilistic, on test set",
+	train_set=train_val_set,
+	val_set=test,
+)
+\end{lstlisting}
+
+Плюсы линейной модели:
+\begin{itemize}
+	\item Простая,
+	
+	\item Не требует масштабирования,
+	
+	\item Быстрая,
+	
+	\item Не требует GPU,
+	
+    \item Часто дает приличное решение <<из коробки>>, без подбора гиперпараметров.
+\end{itemize}
+
+Минусы линейной модели:
+\begin{itemize}
+	\item Потребление памяти может быть серьзеным.
+\end{itemize}
+
+Плюсы TCN:
+\begin{itemize}
+	\item Более гибкая и мощная,
+	
+	\item Обычно потребляет меньше памяти,
+	
+	\item Очень богатая поддержка случайности,
+	
+	\item Быстро строит прогноз по нескольким временным рядам.
+\end{itemize}
+
+Минусы TCN:
+\begin{itemize}
+	\item Большее количество гиперпараметров требует большее количество времени на подбор. Высокий риск переобучения. Это значит, что модель будет сложно вводить в эксплуатацию и поддерживать,
+	
+	\item Часто требует GPU.
+\end{itemize}
+
+
+
+
 
 
 
