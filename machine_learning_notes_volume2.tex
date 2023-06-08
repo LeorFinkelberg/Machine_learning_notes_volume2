@@ -3412,7 +3412,197 @@ periods = len(minimums[0])
 periods
 \end{lstlisting}
 
-\verb|scipy.signal.argrelextrema(arr, np.greater)| возвращает индексы локальных максимумов. 
+\verb|scipy.signal.argrelextrema(arr, np.greater)| возвращает индексы локальных максимумов.
+
+\subsection{API Reference}
+
+\subsubsection{Anomaly Aggregators}
+
+Аггрегаторы поддерживают следующие классы:
+\begin{itemize}
+	\item \verb|darts.ad.aggregators.and_aggregator.AndAggregator|: простое ЛОГИЧЕСКОЕ И,
+	
+	\item \verb|darts.ad.aggregators.ensemble_sklearn_aggregator.EnsembleSklearnAggregator|: обертка над ансамблевыми классами Scikit-learn,
+	
+	\item \verb|darts.ad.aggregators.or_aggregator.OrAggregator|: простое ЛОГИЧЕСКОЕ ИЛИ.
+\end{itemize}
+
+С помощью Anomaly Aggregators можно объединять прогнозы нескольких детекторов. Например, класс \verb|AndAggregator| идентифицирует временной шаг как аномальный, если все компоненты помечают этот шаг как аномальный (простое ЛОГИЧЕСКОЕ И). Принимает этот класс многомерные временные ряды. Пусть есть два бинарных временных ряда. Склеиваем их в один многомерный и строим прогноз (результат ЛОГИЧЕСКОГО И)
+\begin{lstlisting}[
+style = ironpython,
+numbers = none
+]
+from darts.timeseries import TimeSeries
+from darts.ad.aggregators.and_aggregator import AndAggregator
+
+detector_and = AndAggregator()
+
+ts1 = TimeSeries.from_values(np.random.randint(2, size=10))
+ts2 = TimeSeries.from_values(np.random.randint(2, size=10))
+
+tss = ts1.stack(ts2)  # получается многомерный бинарный временной ряд с двумя компонентами
+detector_and.predict(tss)
+\end{lstlisting}
+
+Можно оценить ошибку (по умлочанию, recall)
+\begin{lstlisting}[
+style = ironpython,
+numbers = none
+]
+# То есть предполагается, что есть разметка
+actual_anomalies = TimeSeries.from_values(np.array([0] * 4 + [1] * 6).reshape(-1, 1))
+
+detector.eval_metric(
+	actual_anomalies=actual_anomalies,
+	series=tss,
+)  # 0.5
+
+detector.eval_metric(
+    actual_anomalies=actual_anomalies,
+    series=tss,
+    metric="precision",
+)  # 1.0
+\end{lstlisting}
+
+\subsubsection{Anomaly Models}
+
+Anomaly Models позволяют использовать любую модель Darts \emph{прогнозирования} или \emph{фильтрации} для обнаружения аномалий во временном ряду.
+
+Основная идея заключается в том, чтобы сравнить прогнозы, полученные с помощью обученной модели (прогнозы или отфильтрованные ряды) с наблюдениями и вычислитель оценку аномальности, описывающую как сильно различаются прогнозы и наблюдения.
+
+\paragraph{Filtering Anomaly Model} Это обертка над фильтрационной моделью Darts и одним или несколькими скорерами для вычисления оценки аномальности.
+
+Здесь предполагается, что модель способна адекватно фильтровать временной ряд в отсутствие аномалий. Например,
+\begin{lstlisting}[
+style = ironpython,
+numbers = none
+]
+from darts.models.filtering.kalman_filter import KalmanFilter
+from darts.ad.anomaly_model.filtering_am import FilteringAnomalyModel
+from darts.ad.scorers.kmeans_scorer import KMeansScorer
+
+kalman_filter = KalmanFilter()
+kalman_filter.fit(ts)
+
+fam = FilteringAnomalyModel(
+    model=kalman_filter,  # обученный экземпляр модели
+    scorer=KMeansScorer(),
+)
+
+fam.fit(ts)
+fam.score(ts)
+\end{lstlisting}
+
+\paragraph{Forecasting Anomaly Model} Это обертка над прогностической моделью Darts и одним или несколькими скорерами для вычисления оценок аномальности.
+
+Здесь как и в случае с \verb|FilteringAnomalyModel| предполагается, что модель способна с достаточной точностью предсказывать временной ряд без аномалий. Пример
+
+\begin{lstlisting}[
+style = ironpython,
+numbers = none
+]
+from darts.ad.anomaly_model.forecasting_am import ForecastingAnomalyModel
+from darts.models.forecasting.arima import ARIMA
+from darts.ad.scorers.kmeans_scorer import KMeansScorer
+
+arima = ARIMA()
+arima.fit(ts)
+
+fam = ForecastingAnomalyModel(
+    model=arima, # обученный экземпляр модели
+    scorer=KMeansScorer(),
+)
+
+fam.fit(ts)
+\end{lstlisting}
+
+\subsubsection{Anomaly Detectors}
+
+\paragraph{Quantile Detector}
+
+Anomaly Detectors используют для преобразования временного ряда оценок аномальности в бинарный временной ряд. Некоторые детекторы обучаемые. Например, \verb|QuantileDetecotor| для каждого временного шага возвращает булево значение, если значение временного ряда превышает квантиль обучающего временного ряда
+\begin{lstlisting}[
+style = ironpython,
+numbers = none	
+]
+from darts.ad import QuantileDetector
+from darts.ad import KMeansScorer
+
+scorer = KMeansScorer(k=2, window=5)
+scorer.fit(train)
+anom_score_train = scorer.score(train)
+anom_score_val = scorer.score(val)
+
+detector = QuantileDetector(high_quantile=0.99)
+detector.fit(anom_score_train)
+binary_anom_val = detector.detect(anom_score_val)
+\end{lstlisting}
+
+\paragraph{Threshold Detector} Детектирует аномалию, когда значение временного ряда на каком-то временном шаге превышает заданное пользователем пороговое значение.
+\begin{lstlisting}[
+style = ironpython,
+numbers = none
+]
+from darts.ad.detectors.threshold_detector import ThresholdDetector
+
+detector = ThresholdDetector(high_threshold=0.54)
+detector.detect(ts)
+\end{lstlisting}
+
+\subsubsection{Anomaly Scorers}
+
+Anomaly Scorers это ядро модуля обнаружения аномалий. Они вычисляют оценки аномальности временного ряда. Могут быть обучаемыми (например \verb|KMeansScorer|, обучает кластеры на исторических данных) или необучаемыми (например \verb|NormScorer|, просто вычисляет $ L_p $-норму между прогнозом и истичнным значением на окне). В последнем случае оценка может быть вычислена только с помощью \verb|score_from_prediction()|.
+
+Чем выше оценка аномальности, тем более аномальным считается значение.
+
+Функция \verb|score_from_prediction()| вычисляет оценку аномальности на основе различий (difference or residuals) между прогнозом и истинными значениями. 
+
+Например, \verb|KMeansScorer| может обучаться так:
+\begin{itemize}
+	\item \verb|fit()| и \verb|score()|,
+	
+	\item \verb|fit_from_prediction()| и \verb|score_from_prediction()|: вычисляет различия (residuals) между прогнозом (предоставляется прогностической моделью) и истинными значениями. Более высокие значения аномальности назначаются тем значениям, которые сильнее удалено от кластеров, найденых в ходе обучения.
+\end{itemize}
+
+У большинства скореров есть следующие основные параметры:
+\begin{itemize}
+	\item \verb|window|: целое число, определяющее размер окна $ W $. Скорер разбивает временной ряд на фрагменты размера $ W $ и возвращает значение, определяющее аномальность фрагмента длины $ W $. Размер окна должен быть соизмерим с ожидаемой продолжительностью аномалии.
+	
+	\item \verb|component_wise|: булево значение, определяющее как скорер будет работать с многомерными временными рядами. Если выставить в True, то модель будет обрабатывать каждое измерение независимо. В противном случае модель будет рассматривать измерения совместно. 
+\end{itemize}
+
+Еще есть метод \verb|eval_accuracy_from_prediction()|. Он принимает два временных ряда, вычисляет все оценки аномальности и возвращает значение метрики (AUC-ROC или AUC-PR) на основе разметки аномалий. Метрика принимает значения от 0 до 1, и 1 означает, что скорер мог бы идельно отличить аномальную точку от нормальной.
+
+И еще метод \verb|fit_from_prediction()|. Принимает два временных ряда и обучает скорер. Эта задача зависит от скорера, но в общем случае скоререр калибрует скоринговую функцию на основе обучающего временного ряда, который предполагается свободным от аномалий.
+
+\paragraph{Difference Scorer}
+
+\verb|darts.ad.scorers.difference_scorer.DifferenceScorer| -- этот скорер просто вычисляет поэлементные разности между двумя временными рядами. Если эти ряды многомерные, то вернется многомерный временной ряд.
+
+\paragraph{K-means Scorer}
+
+\verb|darts.ad.scorers.kmeans_scorer.KMeansScorer| Когда вызывается метод \verb|fit(series)|, к временному ряду применяется скользящее окно, в результате чего получается набор векторов размера $ W $ (то есть $ W $ -- это размер окна). Сегментатор K-Means обучается на этих векторах. Метод \verb|score(series)| применяется с тем же скользящем окном и возвращает расстояние до ближайшего центроида для каждого вектора размера $ W $.
+
+Альтернативно можно воспользоваться методами \verb|fit_from_prediction()| и \verb|score_from_prediction()|. Оба требуют два временных ряда (истинный и прогноз) и вычисляют разницу (difference) между их значениями с помощью функции \verb|diff_fn| (по умолчанию абсолютное отклонение). Затем результирующий ряд передается методам \verb|fit()| и \verb|score()| соответственно.
+
+\verb|component_wise| булев параметр, указывающий на то, как модель будет обрабатывать многомерные временные ряды. Если выставить в True, то модель будет обрабатывать каждую компоненту независимо, подгоняя свою модель K-Means под каждое измерение. Если выставить в False, то модель по каждому окну склеит все измерения в одно и вычислит оценку аномальности с помощью только одного сегментатора K-Means.
+
+\paragraph{NLL Cauchy Scorer}
+
+\verb|darts.ad.scorers.nll_cauchy_scorer.CauchyNLLScorer| Оценка аномальности вычисляется как отрицательный логарифм правдоподобия в предположении, что наблюдаемые значения описываются законом Коши.
+
+Аналогично обстоят дела и с \verb|darts.ad.scorers.nll_exponential_scorer.ExponentialNLLScorer| и пр.
+
+\paragraph{PyODScorer} 
+
+\verb|darts.ad.scorers.pyod_scorer.PyODScorer| Этот скорер может оборачивать алгоритмы обнаружения аномалий в PyOD. Когда вызывается \verb|fit(series)|, ко временному ряду применяется скользящее окно, которое разбивает ряд на фрагменты (вектора) длины $ W $. В результате получается множество фрагментов длины $ W $. \verb|PyODScorer| обучается на этих фрагментах. Метод \verb|score(series)| применяется с тем же окном и возвращает сырую оценку аномальности для каждого вектора.
+
+\paragraph{WassersteinScorer}
+
+Это скорер Вассерштейна (он же метрика Конторовича-Рубинштейна) -- функция расстояния, определнная между распределениями вероятностей в заданном метрическом пространстве $ M $. Когда вызывается \verb|fit(series)|, ко временному ряду применяется скользящее окно, которое разбивает ряд на фрагменты (вектора) длины $ W $. В результате получается множество фрагментов длины $ W $. Расстояние Вассерштейна вычисляется между обучающим распределением и каждым фрагментом (вектором).
+
+
+
 
 
 
@@ -7229,6 +7419,50 @@ def weighted_mean_average_percentage_error(
         weights = np.ones_like(y_true)
     
     return 100 * (weights * np.abs(y_true - y_pred)).sum() / (weights * np.abs(y_true)).sum()
+\end{lstlisting}
+
+\subsection{MASE}
+
+MASE (Mean Absolute Scaled Error) обладает следующими свойствами:
+\begin{itemize}
+	\item Не зависит от масштаба данных, и потому может применяться для сравнения прогнозов по наборам данных с различными масштабами,
+	
+	\item Сохраняет предсказуемое поведение при значениях $ y_t $ близких к нулю,
+	
+	\item \emph{Симметрично} штрафует за положительные и отрицательные ошибки, а также большие (прогноз значительно превышает цель) и малые (прогноз значительно меньше цели) прогнозы. <<Симметричные>> SMAPE и sMdAPE не соответствуют второму критерию,
+	
+	\item Легко интерпретируется. Значения больше единиц указывают на то, что прогнозы, полученные с помощью \emph{наивного метода} (в качестве прогноза использовать последнее значение временного ряда $ \hat{y}_{T + h | T} = y_T $) работают лучше, чем прогнозы, полученные с помощью данной модели.
+\end{itemize}
+
+Замечание: Если есть основания считать, что у временного ряда есть сезонность, то лучше использовать \emph{наивный подход с сезонностью}, то есть $ \hat{y}_{T + h | T} = y_{T +h - m (k + 1)} $.
+
+Для временного ряда \emph{без} сезонной компоненты
+
+\begin{align*}
+	MASE = \dfrac{ \dfrac{1}{J} \sum_j |Y_j - F_j| }{ \dfrac{1}{T - 1 } \sum_{t=2}^T |Y_t - Y_{t-1} | },
+\end{align*}
+где $ J $ -- число прогнозов (количество временных меток во временном ряду), $ Y_t $ -- значение цели на временном шаге $ t $, $ F_t $ -- прогноз на временном шаге $ t $.
+
+Для временного ряда \emph{с} сезонной компонентой
+\begin{align*}
+	MASE = \dfrac{ \dfrac{1}{J} | Y_j - F_j | }{ \dfrac{1}{T - m} \sum_{t = m + 1}^T | Y_t - Y_{t - m} | }
+\end{align*}
+
+В последнем случае знаменатель это средняя абсолютная ошибка, полученная с помощью \emph{сезонного наивного метода прогнозирования} (seasonal naive forecast method) $ F_t = Y_{t - m} $, где $ m $ это период сезонной компоненты. 
+
+Для того чтобы вычислить MASE в Darts нужно использовать временные ряды с временными метками
+\begin{lstlisting}[
+style = ironpython,
+numbers = none
+]
+from darts.metrics import mase
+
+ts = TimeSeries.from_series(pd.Series(np.random.randn(100), index=pd.date_range("09/06/2023", periods=100)))
+train, val = ts[:-10], ts[-10:]
+
+preds = TimeSeries.from_series(pd.Series(np.random.randn(10), index=val.time_index))
+
+mase(val, preds, train)  # 0.7041
 \end{lstlisting}
 
 
