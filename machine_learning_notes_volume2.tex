@@ -25,6 +25,29 @@
 
 \tableofcontents
 
+\section{Анализ временных рядов}
+
+\subsection{Дискретные временные ряды (Time Series of Counts). Метод Кростона}
+
+Метод Кростона -- это стратегия прогноза для продуктов со спорадической потребностью (то есть с нерегулярной потребностью).
+
+Иногда ординаты временного ряда могут быть не вещественными числами, а целами. При достоточно больших значениях этих ординат разница между вещественным диапазоном $ [100, \infty) $ и дискретным $ \{100, 101, 102, \ldots \} $ невилика, то есть не оказывает практически никакого влияния на прогнозы модели. Однако, в том случае, когда значения малы $ (0, 1, 2, \ldots) $, имеет смысл использовать специальные алгоритмы построения прогноза, адаптированные к пространству неотрицательных целых чисел.
+
+\begin{align*}
+	\hat{q}_{i + 1 | i} &= (1 - \alpha_q) \, \hat{q}_{ i | i - 1 } + \alpha_q q_i, \\
+	\hat{a}_{i + 1 | i} &= (1 - \alpha_a) \, \hat{a}_{ i | i - 1 } + \alpha_a a_i,
+\end{align*}
+где $ \hat{q}_{i + 1 | i} $ -- прогноз для спроса/потребности (demand) на шаге $ (i + 1) $; $ \hat{a}_{i + 1 | i} $ -- прогноз для времени доставки (inter-arrival) на шаге $ (i + 1) $; $ \alpha_a, \alpha_q $ -- параметры сглаживания (принимают значения в диапазоне от 0 до 1).
+
+Тогда прогноз на $ h $ шагов вперед будет выглядеть так
+\begin{align*}
+	\hat{y}_{T + h | T} = \hat{q}_{j + 1 | j} / \hat{a}_{j + 1 | j}.
+\end{align*}
+
+
+
+
+
 \section{Приемы работы с библиотекой анализа временных рядов Darts}
 
 \url{https://unit8co.github.io/darts/}
@@ -3601,6 +3624,131 @@ Anomaly Scorers это ядро модуля обнаружения аномал
 
 Это скорер Вассерштейна (он же метрика Конторовича-Рубинштейна) -- функция расстояния, определнная между распределениями вероятностей в заданном метрическом пространстве $ M $. Когда вызывается \verb|fit(series)|, ко временному ряду применяется скользящее окно, которое разбивает ряд на фрагменты (вектора) длины $ W $. В результате получается множество фрагментов длины $ W $. Расстояние Вассерштейна вычисляется между обучающим распределением и каждым фрагментом (вектором).
 
+\subsection{Модели}
+
+\subsubsection{ARIMA}
+
+\verb|darts.models.forecasting.arima.ARIMA| это ванильная модель проинтегрированной авторегрессии скользящего среднего.
+
+Основные параметры:
+\begin{itemize}
+	\item \verb|p| (int) -- порядок (число временных лагов) авторегрессионной модели (AR),
+	
+	\item \verb|d| (int) -- порядок дифференциирования; то есть количество раз, когда из данных вычитатились предыдущие значения,
+	
+	\item \verb|q| (int) -- размер окна скользящего среднего (MA),
+	
+	\item \verb|seasonal_order| (Tuple[int, int, int, int]) -- порядки сезонной компоненты для модели авторегрессии, дифференциирования, скользящего среднего и периодичности,
+	
+	\item \verb|trend| (str) -- параметр, контролирующий детерминированный тренд; \verb|'n'| означает, что тренда нет, \verb|'c'| -- постоянный тренд, \verb|'t'| -- линейный тренд во времени и \verb|'ct'| включает оба.
+\end{itemize}
+
+Для того чтобы оценить качество модели с помощью стратегии расширяющегося или скользящего окна, следует воспользоваться методом \verb|historical_forecasts|. Этот метод на каждой итерации строит обучающий набор следующим образом. Либо расширяет окно, начиная с самого начала временного ряда (стратегия расширяющегося окна, expanding window), либо скользит окном фиксированной длины (moving window), которая задается параметром \verb|train_length|. Он обучает модель на обучающем наборе, строит прогноз длины \verb|forecast_horizon| и затем смещается на \verb|stride| временных шагов.
+
+По умолчанию метод \verb|historical_forecast| всегда обучает модель заново на каждой итерации, что соответствует стратегии расширяющего окна. Если выставить параметр \verb|retrain| в False, то это будет означать, что модель должна быть подогнана заранее. Не все модели это поддерживают.
+
+\subsubsection{AutoARIMA}
+
+\verb|darts.models.forecasting.auto_arima.AutoARIMA| это тонкая обертка для \verb|pmdarima|.
+
+\subsubsection{Baseline Models}
+
+Baseline Models -- это коллекция простых наивных моделей для одномерных временных рядов.
+
+\paragraph{Naive Drift}
+
+\verb|darts.models.forecasting.baselines.NaiveDrift| этот класс строит линейный прогноз по обчающему набору как
+\begin{align*}
+	\hat{y}_{T + h} = y_T + h \, \Big( \dfrac{y_T - y_1}{ T - 1} \Big)
+\end{align*}
+
+Аналогичным образом устроены и другие наивные модели.
+
+\subsubsection{Block Recurrent Neural Networks}
+
+Эта модель использует RNN-кодировщик для кодирования фрагментов (chunks) фиксированной длины и полносвязанную сеть для построения выходов фиксированной длины.
+
+Модель поддерживает ковариаты прошлого времени (известные для \verb|input_chunk_length| точек до точки прогноза). Класс \verb|darts.models.forecasting.block_rnn_model.BlockRNNModel| поддерживает три варианта RNN: ванильные RNN, рекуррентные сети с LSTM-ячейками и рекуррентные сети с GRU-ячейками.
+
+\subsubsection{Recurrent Neural Networks}
+
+Класс \verb|darts.models.forecasting.rnn_model.RNNModel| предлагает 3 варианта RNN: ванильная RNN, RNN с LSTM-ячейками и RNN с GRU-ячейками.
+
+
+\subsubsection{Exponential Smoothing}
+
+Класс \verb|darts.models.forecasting.exponential_smoothing.ExponentialSmoothing| -- это модель экспоненциального сглаживания Хольта-Винтерса.
+
+\subsubsection{Fast Fourier Transform}
+
+Класс \verb|darts.models.forecasting.fft.FFT| это модель строит прогноз, используя быстрое преобразование Фурье, с последующей частотной фильтрацией.
+
+Автоматически определяет сезонный период, используя 10 наиболее значимых частот для прогнозирования и ожидает, что в данных не будет глобального тренда
+\begin{lstlisting}[
+style = ironpython,
+numbers = none
+]
+from darts.models.forecasting.fft import FFT
+
+FFT(nr_freqs_to_keep=10)
+\end{lstlisting}
+
+В следующем примере предполагается, что временной ряд имеет ежемесячную сезонность и экспоненциальный глобальный тренд
+\begin{lstlisting}[
+style = ironpython,
+numbers = none
+]
+FFT(
+    required_matches={"month"},
+    trend="exp",
+)
+\end{lstlisting}
+
+\subsubsection{StatsForecastAutoARIMA}
+
+Класс \verb|darts.models.forecasting.sf_auto_arima.StatsForecastAutoARIMA| базируется на пакете \href{https://github.com/Nixtla/statsforecast}{statsforecast}. Работает быстрее чем AutoARIMA, но обычно требует больше времени на первый вызов, так как операется на Numba и jit-компиляцию. Еще это вероятностная модель, в отличие от AutoARIMA
+\begin{lstlisting}[
+style = ironpython,
+numbers = none
+]
+from darts.models import StatsForecastAutoARIMA
+from darts.datasets import AirPassengersDataset
+
+series = AirPassengersDataset().load()
+model = StatsForecastAutoARIMA(season_length=12)
+model.fit(series[:-36])
+pred = model.predict(36, num_samples=100)
+\end{lstlisting}
+
+\subsubsection{StatsForecastAutoCES}
+
+Класс \verb|darts.models.forecasting.sf_auto_ces.StatsForecastAutoCES| это обертка для пакета \href{https://github.com/Nixtla/statsforecast}{statsforecast}. Предназначен для автоматического выбора лучшей модели сложного экспоненциального сглаживания (Complex Exponential Smoothing) с помощью информационного критерия \url{https://onlinelibrary.wiley.com/doi/full/10.1002/nav.22074}
+\begin{lstlisting}[
+style = ironpython,
+numbers = none
+]
+from darts.models import StatsForecastAutoCES
+from darts.datasets import AirPassengersDataset
+
+series = AirPassengersDataset().load()
+model = StatsForecastAutoCES(season_length=12)
+model.fit(series[:-36])
+pred = model.predict(36, num_samples=100)
+\end{lstlisting}
+
+\subsubsection{StatsForecastAutoETS}
+
+Класс \verb|darts.models.forecasting.sf_auto_ets.StatsForecastAutoETS| это обертка для пакета \href{https://github.com/Nixtla/statsforecast}{statsforecast}. Может работать эффективнее \verb|ExponentialSmoothing|, но требует больше времени на первый вызов, так как опирается на Numba и jit-компиляцию.
+
+\subsubsection{StatsForecastAutoTheta}
+
+Класс \verb|darts.models.forecasting.sf_auto_theta.StatsForecastingAutoTheta| автоматически выбирает лучшую Theta-модель из стандартной Theta-модели (\verb|"STM"|), оптимальной Theta-модели (\verb|"OTM"|), динамической стандартной Theta-модели (\verb|"DSTM"|) с использованием MSE.
+
+Эта реализация вероятностная, а \verb|FourTheta| нет.
+
+\subsubsection{BATS и TBATS}
+
+(T)BATS подходит для моделирования сложных сезонных временных рядов, таких как ряды с несколькими сезонными периодами, высокочастотной сезонностью, нецелочисленной сезонностью и эффектом двойного календаря.
 
 
 
