@@ -5611,7 +5611,7 @@ if __name__ == "__main__":
 \end{lstlisting}
 
 
-\subsection{Подбор гиперпараметров для LightGBM с помощью Optuna LightGBMTuner}
+\subsection{Подбор гиперпараметров для LightGBM с помощью Optuna LightGBMTuner и LightGBMTunerCV}
 
 \url{https://medium.com/optuna/lightgbm-tuner-new-optuna-integration-for-hyperparameter-optimization-8b7095e99258}
 
@@ -5722,6 +5722,10 @@ if __name__ == "__main__":
 		print("    {}: {}".format(key, value))
 \end{lstlisting}
 
+Обратный вызов \verb|lightgbm.early_stopping()| \url{https://lightgbm.readthedocs.io/en/latest/pythonapi/lightgbm.early_stopping.html#lightgbm.early_stopping} активирует раннюю остановку. Модель будет обучаться до тех пор пока метрика качества на валидационном поднаборе данных (в оригинале validation score) не улучшется хотя бы на \verb|min_delta| (по умолчанию 0.0). Метрика качества на валидационном поднаборе данных (для того чтобы модель могла продолжить обучаться) должна улучшаться по крайней мере каждые \verb|stopping_rounds| (допустимое число раундов без улучшения) Требуется хотя бы один валидационный поднабор данных и одна метрика. Если передать несколько поднаборов, то использоваться будут все кроме обучающего поднабора. Индекс итерации с наилучшей производительностью модели будет привязан к атрибуту модели \verb|best_iteration|.
+
+NB: как я понял в терминологии LightGBM раунды и итерации это одно и то же. Например, параметр \verb|num_boost_round| в \verb|ligthgbm.train()| описывается как <<number of boosting \emph{iterations}>>, то есть как число итераций градиентного бустинга.
+
 Подбор гиперпараметров начинается, когда вызывается функция \verb|lgb.train()|, а построить прогноз можно так
 \begin{lstlisting}[
 style = ironpython,
@@ -5729,6 +5733,51 @@ numbers = none
 ]
 cohen_kappa_score(y_test, np.rint(model.predict(X_test)))  # 0.9750292056074766
 \end{lstlisting}
+
+Еще можно воспользоваться классом \verb|LightGBMTunerCV| для подбора гиперпараметров модели на перекрестной проверке. Он подбирает гиперпараметры в той же последовательной манере, что и класс \verb|LIghtGBMTuner|. \verb|LightGBMTunerCV| вызывает \verb|lightgbm.cv()| для обучения и валидации бустреров в то время как \verb|LIghtGBMTuner| вызывает \verb|lightgbm.train()|.
+
+Пример
+\begin{lstlisting}[
+style = ironpython,
+numbers = none,
+]
+import optuna.integration.lightgbm as lgb
+
+from lightgbm import early_stopping
+from lightgbm import log_evaluation
+import sklearn.datasets
+from sklearn.model_selection import KFold
+
+
+if __name__ == "__main__":
+	data, target = sklearn.datasets.load_breast_cancer(return_X_y=True)
+	dtrain = lgb.Dataset(data, label=target)
+
+	params = {
+		"objective": "binary",
+		"metric": "binary_logloss",
+		"verbosity": -1,
+		"boosting_type": "gbdt",
+	}
+
+	tuner = lgb.LightGBMTunerCV(  # <- NB!
+		params,
+		dtrain,
+		folds=KFold(n_splits=3),
+		callbacks=[early_stopping(100), log_evaluation(100)],
+	)
+
+	tuner.run()
+
+	print("Best score:", tuner.best_score)
+	best_params = tuner.best_params
+	print("Best params:", best_params)
+	print("  Params: ")
+	for key, value in best_params.items():
+	print("    {}: {}".format(key, value))
+\end{lstlisting}
+
+
 
 \subsection{Распределенное обучение с LightGBM}
 
