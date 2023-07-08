@@ -5765,6 +5765,7 @@ if __name__ == "__main__":
 		dtrain,
 		folds=KFold(n_splits=3),
 		callbacks=[early_stopping(100), log_evaluation(100)],
+		time_budget=600,
 	)
 
 	tuner.run()
@@ -5777,6 +5778,20 @@ if __name__ == "__main__":
 	print("    {}: {}".format(key, value))
 \end{lstlisting}
 
+Возможно я что-то упустил, но на текущий момент нет возможности строить прогноз с помощью тюнера. Но можно забрать наилучшую комбинацию гиперпараметров, затем с ней создать экземпляр модели градиентного бустинга, например, используя Sklearn-интерфейс, обучить модель заново и потом забрать прогноз
+\begin{lstlisting}[
+style = ironpython,
+numbers = none
+]
+import lightgbm as lgb
+
+model = lgb.LGBClassifier(**tuner.best_params)
+# model.get_params # Чтобы проверить параметры
+model.fit(X_sub_train, y_sub_train)
+model.predict(X_val)
+\end{lstlisting}
+
+Еще вместо метода \verb|run()| можно использовать методы \verb|tune_regularization_factors()|, \verb|tune_bagging()| и пр. В документации описания нет, но кажется, что они просто подбирают соответсвующие подгруппы гиперпараметров -- например, \verb|tune_regularization_factors()| подбирает только \verb|lambda_l1| и \verb|lambda_l2| и т.д.
 
 
 \subsection{Распределенное обучение с LightGBM}
