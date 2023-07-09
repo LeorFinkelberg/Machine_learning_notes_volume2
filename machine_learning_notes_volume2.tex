@@ -4720,6 +4720,136 @@ print(df[np.isinf(df['Label (upper bound)'])])
 bst.save_model('aft_best_model.json')
 \end{lstlisting}
 
+\subsection{Последовательные подбор гиперпараметров в XGBoost}
+
+Последовательный алгоритм подбора гиперпараметров в XGBoost был заимствован из LightGBM. Наиболее важные параметры XGBoost разбивают на три группы:
+\begin{enumerate}
+	\item \verb|max_depth|, \verb|min_child_weight|,
+	
+	\item \verb|subsample|, \verb|colsample_bytree|,
+	
+	\item \verb|learning_rate|, \verb|num_boost_round|.
+\end{enumerate}
+
+Изначально параметры \verb|learning_rate| и \verb|num_boost_round| фиксируются в 0.1 и 1000 соответсвтенно. Значения гиперпараметров каждой группы подбираются последовательно. При подборе значений гиперпараметров текущей группы все прочие гиперпараметры принимают значения по умолчанию или стартовые значения, а гиперпараметры <<отработаных>> групп получают значения, найденные в процессе подбора.
+
+Преимущество последовательного подбора гиперпараметров заключается в том, что пространство поиска сужается. Для каждой группы параметров пространство поиска будет иметь только два измерения. В этом случае поиск будет значительно быстрее, чем поиск по всему набору параметров сразу.
+
+\begin{lstlisting}[
+style = ironpython,
+numbers = none
+]
+import xgboost as xgb
+from optuna import create_study, logging
+from optuna.pruners import MedianPruner
+from optuna.integration import XGBoostPruningCallback
+
+
+def objective(trial, X, y, group, score, params=dict()):
+	dtrain = xgb.DMatrix(X, label=y)
+	class_weight = (y.shape[0] - np.sum(y)) / np.sum(y)
+	
+	## Initial Learning Parameters
+	params['learning_rate'] = 0.1
+	params['num_boost_round'] = 1000
+	
+	if group == '1':
+		params['max_depth'] = trial.suggest_int('max_depth', 2, 10)
+		params['min_child_weight'] = trial.suggest_loguniform('min_child_weight',
+		1e-10, 1e10)
+
+	if group == '2':
+		params['subsample'] = trial.suggest_uniform('subsample', 0, 1)
+		params['colsample_bytree'] = trial.suggest_uniform('colsample_bytree', 0, 1)
+
+	if group == '3':
+		params['learning_rate'] = trial.suggest_uniform('learning_rate', 0, 0.1)
+		params['num_boost_round'] = trial.suggest_int('num_boost_round', 100, 1000)
+
+	pruning_callback = XGBoostPruningCallback(trial, "test-" + score.__name__)
+	cv_scores = xgb.cv(params, dtrain, nfold=5,
+		stratified=True,
+		feval=score,
+		early_stopping_rounds=10,
+		callbacks=[pruning_callback],
+		seed=0)
+
+	return cv_scores['test-' + score.__name__ + '-mean'].values[-1]
+
+
+def execute_optimization(study_name, group, score, trials,
+		params=dict(), direction='maximize'):
+	logging.set_verbosity(logging.ERROR)
+
+	## We use pruner to skip trials that are NOT fruitful
+	pruner = MedianPruner(n_warmup_steps=5)
+	
+	study = create_study(direction=direction,
+		study_name=study_name,
+		storage='sqlite:///optuna.db',
+		load_if_exists=True,
+		pruner=pruner)
+	
+	study.optimize(lambda trial: objective(trial, x_train, y_train,
+		group, score, params),
+		n_trials=trials,
+		n_jobs=-1)
+
+
+	print("STUDY NAME: ", study_name)
+	print('------------------------------------------------')
+	print("EVALUATION METRIC: ", score.__name__)
+	print('------------------------------------------------')
+	print("BEST CV SCORE", study.best_value)
+	print('------------------------------------------------')
+	print(f"OPTIMAL GROUP - {group} PARAMS: ", study.best_params)
+	print('------------------------------------------------')
+	print("BEST TRIAL", study.best_trial)
+	print('------------------------------------------------')
+
+
+	return study.best_params
+\end{lstlisting}
+
+Так как в XGBoost нет метрики $ F_1 $, придется написать ее самим
+\begin{lstlisting}[
+style = ironpython,
+numbers = none
+]
+score_func = metrics.f1_score
+def score_function(y_pred, dtrain):
+	y_pred = (y_pred > 0.5).astype(int)
+	y_true = (dtrain.get_label() > 0.5).astype(int)
+	return score_func.__name__, score_func(y_true, y_pred)
+
+score_function.__name__ = score_func.__name__
+\end{lstlisting}
+
+Функция для запуска последовательного подбора гиперпараметров
+\begin{lstlisting}[
+style = ironpython,
+numbers = none
+]
+def stepwise_optimization(trials=10):
+	final_params = dict()
+	for g in ['1', '2', '3']:
+		print(f"=========================== Optimizing Group - {g} ============================")
+		update_params = execute_optimization('xgboost', g, score_function, trials,
+		params=final_params, direction='maximize')
+		final_params.update(update_params)
+		print(f"PARAMS after optimizing GROUP - {g}: ", final_params)
+		print()
+		print()
+
+	print("=========================== FINAL OPTIMAL PARAMETERS ============================")
+	print(final_params)
+
+	return final_params
+	
+params = stepwise_optimization()
+\end{lstlisting}
+
+
 \subsection{Подбор гиперпараметров XGBoost на отложенной выборке с подрезкой <<слабых>> запусков}
 
 \begin{lstlisting}[
@@ -5906,7 +6036,14 @@ LightGBM значительно эффективнее XGBoost и алгорит
 
 \section{Приемы работы с библиотекой подбора гиперпараметров Optuna}
 
-\url{https://optuna.org/}
+Ремарка: Optuna \url{https://optuna.org/} -- это одна из библиотек оптимизации, которая поддерживает Sequential Model Base Optimization (SMBO). SMBO использует информацию о проведенных исследованиях для более обоснованного выбора значений гиперпараметров.
+
+Достоинства SMBO: 
+\begin{itemize}
+	\item Обходится небольшим количеством итераций сходимости даже если пространство поиска велеико.
+	
+	\item Поиск сосредоточен на области, которая ближе всего к оптимальной точке.
+\end{itemize}
 
 Базовые понятия:
 \begin{itemize}
@@ -6885,6 +7022,7 @@ study.optimize(objective, n_trials=10, callbacks=[lambda study, trial: gc.collec
 
 
 
+
 \section{Приемы работы с AutoML-библиотекой FLAML}
 
 FLAML \url{https://github.com/microsoft/FLAML} -- это легковесная библиотека эффективной автоматизации процессов машинного обучения, включая выбор модели, подбор гиперпараметров и пр.
@@ -7511,6 +7649,8 @@ print('Training duration of best run: {0:.4g} s'.format(automl.best_config_train
 
 \section{Масштабирование признаков с выбросами}
 
+В общем машстабирование признаков требуется для того чтобы признаки с б\emph{о}льшей дисперсией <<не забивали>> во время обучения модели признаки с меньшей дисперсией. Как и все прочие преобразования, масштабирование следует выполнять только после разбиения набора данных на обучение и тест.
+
 \url{https://scikit-learn.org/stable/auto_examples/preprocessing/plot_all_scaling.html#original-data}
 
 Для того чтобы сделать признаки <<более гауссовскими>> можно попробовать степенное преобразование по модели Бокса-Кокса или Яо-Джонсона. Еще можно использовать квантильное преобразование с гауссовским выходом \verb|QuantileTransformer(output_distribution="normal")|.
@@ -7519,6 +7659,20 @@ print('Training duration of best run: {0:.4g} s'.format(automl.best_config_train
 
 
 \section{Дисбаланс классов}
+
+Ремарка: в XGBoost перевзвесить экземпляры обучающего набора с дисбалансом можно так
+\begin{lstlisting}[
+style = ironpython,
+numbers = none
+]
+## Compute `class_weights` using sklearn
+cls_weight = (y_train.shape[0] - np.sum(y_train)) / np.sum(y_train)
+
+xgb_clf_default = XGBClassifier(
+    scale_pos_weight=cls_weight,
+    random_state=0, n_jobs=-1
+)
+\end{lstlisting}
 
 \emph{Несбалансированность классов} может оказать существенное влияние на качество модели независимо от выбранного алгоритма обучения. Суть проблемы -- крайне неравномерное распределение меток в обучающих данных \cite[\strbook{85}]{burkov-engineer:2022}.
 
