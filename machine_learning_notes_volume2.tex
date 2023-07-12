@@ -6998,6 +6998,35 @@ study.best_trial.params
 
 ВАЖНО: Optuna не поддерживает сохранение/загрузку в разных версиях Optuna с \verb|pickle|. Если требуется сохранять/восстанавливать сессии исследований в различных версиях Optuna, то следует использовать СУБД и обновить схему хранилища, если требуется.
 
+\subsection{Визуализация с optuna-dashboard}
+
+Для того чтобы получить dashboard результатов подбора гиперпараметров в режиме реального времени, достаточно просто установить \verb|pip install optuna-dashboard|.
+
+Затем при запуске сессии подбора гиперпарметров нужно создать базу данных, указав \verb|storage|
+\begin{lstlisting}[
+style = ironpython,
+numbers = none
+]
+study = optuna.create_study(
+    direction="maximize",
+    study_name="lgb_custom_tune",
+    storage="sqlite:///lgb_custom_tune.db",  # << NB
+    load_if_exists=True,
+)
+
+study.optimize(...)
+\end{lstlisting}
+
+По завершении поиска нужно вызывать optuna-dashboard
+\begin{lstlisting}[
+style = ironpython,
+numbers = none
+]
+$ optuna-dashboard sqlite:///lgb_custom_tune.db
+\end{lstlisting}
+
+На локальном петлевом интерфейсе \verb|http://localhost:8080/| будет доступен dashboard.
+
 \subsection{Как сохранить модель машинного обучения, обученную в функции \texttt{objective}}
 
 Optuna сохраняет значения гиперпараметров, но не сохраняет модели машинного обучения или веса нейронных сетей. Чтобы сохранить модель, следует воспользоваться средствами используемой библиотеки машинного обучения. Рекомендуется сохранять номер запуска
