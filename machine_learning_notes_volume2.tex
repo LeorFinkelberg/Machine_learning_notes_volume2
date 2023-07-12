@@ -7002,7 +7002,7 @@ study.best_trial.params
 
 Для того чтобы получить dashboard результатов подбора гиперпараметров в режиме реального времени, достаточно просто установить \verb|pip install optuna-dashboard|.
 
-Затем при запуске сессии подбора гиперпарметров нужно создать базу данных, указав \verb|storage|
+При создании сессии подбора гиперпарметров нужно указать путь до базы данных с помощью параметра \verb|storage|
 \begin{lstlisting}[
 style = ironpython,
 numbers = none
@@ -7017,7 +7017,7 @@ study = optuna.create_study(
 study.optimize(...)
 \end{lstlisting}
 
-По завершении поиска нужно вызывать optuna-dashboard
+По завершении поиска нужно вызывать optuna-dashboard (хотя можно и параллельно с поиском; dashboard будет обновляться в режиме близком к реальному времени)
 \begin{lstlisting}[
 style = ironpython,
 numbers = none
