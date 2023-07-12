@@ -6093,6 +6093,8 @@ LightGBM значительно эффективнее XGBoost и алгорит
 
 Ремарка: Optuna \url{https://optuna.org/} -- это одна из библиотек оптимизации, которая поддерживает Sequential Model Base Optimization (SMBO). SMBO использует информацию о проведенных исследованиях для более обоснованного выбора значений гиперпараметров.
 
+
+
 Достоинства SMBO: 
 \begin{itemize}
 	\item Обходится небольшим количеством итераций сходимости даже если пространство поиска велеико.
@@ -6165,6 +6167,219 @@ def objective(trial):
     dropout_rate = trial.suggest_float("dropout_rate", 1e-5, 1e-2, log=True)
     drop_path_rate = trial.suggest_float("drop_path_rate", 0.0, 1.0, step=0.1)
 \end{lstlisting}
+
+
+\subsection{Шаблон подбора гиперпараметров с помощью связки <<Optuna и LightGBM>>}
+
+Класс целевой функции (функции, которую нужно оптимизировать) выглядит так
+\begin{lstlisting}[
+style = ironpython,
+numbers = none
+]
+class Objective:
+	def __init__(
+		self,
+		X_train: pd.DataFrame,
+		y_train: pd.Series,
+		params: t.Optional[dict] = None,
+		num_boost_round: int = 1000,
+		nfold: int = 10,
+		stratified: bool = True,
+		shuffle: bool = True,
+		time_budget: float = 600,
+		objective: str = "binary",
+		metric: str = "auc",
+		use_lightgbm: bool = True,
+		reduction_ratio: float = 0.8,
+		seed: int = 42,
+		verbosity: int = -1,
+	):
+		self.params = params if params is not None else {}
+		self.X_train = X_train
+		self.y_train = y_train
+		self.num_boost_round = num_boost_round
+		self.dtrain = lgb.Dataset(self.X_train, self.y_train)
+		self.nfold = nfold
+		self.stratified = stratified
+		self.shuffle = shuffle
+		self.time_budget = time_budget
+		self.objective = objective
+		self.metric = metric
+		self.use_lightgbm = use_lightgbm
+		self.reduction_ratio = reduction_ratio
+		self.verbosity = verbosity
+		self.seed = seed
+
+	def __call__(self, trial):                        
+		self.params.update({
+			# описываем пространство поиска
+			"boosting_type": trial.suggest_categorical("boosting_type", ["gbdt", "dart"]),
+			"max_depth": trial.suggest_int("max_depth", 1, 10),
+			"learning_rate": trial.suggest_float("learning_rate", 1e-5, 0.1, log=True),
+			"num_leaves": trial.suggest_int("num_leaves", 2, 80),
+			"lambda_l1": trial.suggest_float("lambda_l1", 1e-8, 10.0, log=True),
+			"lambda_l2": trial.suggest_float("lambda_l2", 1e-8, 10.0, log=True),
+			"feature_fraction": trial.suggest_float("feature_fraction", 0.25, 1.0),
+			"bagging_fraction": 1.0, # trial.suggest_float("bagging_fraction", 0.5, 1.0),
+			# "bagging_freq": trial.suggest_int("bagging_freq", 1, 7),
+			# "min_child_samples": trial.suggest_int("min_child_samples", 3, 10),
+			"min_sum_hessian_in_leaf": trial.suggest_float("min_sum_hessian_in_leaf", 2.0, 10.0),
+			"min_gain_to_split": trial.suggest_float("min_gain_to_split", 0.0, 10.0),
+		})
+
+		if self.params["boosting_type"] == "dart":
+			params["drop_rate"] = trial.suggest_float("drop_rate", 1e-8, 1.0, log=True)
+			params["skip_drop"] = trial.suggest_float("skip_rate", 1e-8, 1.0, log=True)
+			
+		pruning_callback = LightGBMPruningCallback(trial, self.metric)
+
+        # метод возвращает историю
+		history = lgb.cv(
+			params=self.params,
+			train_set=self.dtrain,
+			num_boost_round=self.num_boost_round,
+			nfold=self.nfold,
+			callbacks=[
+			    lgb.early_stopping(25),  # и ранняя остановка
+			    pruning_callback,  # и пранер
+			],
+			seed=self.seed,
+		)
+
+		val_mean_auc = history.get(f"{self.metric}-mean")[-1]
+
+		return val_mean_auc
+\end{lstlisting}
+
+То есть откликом целевой функции будет последнее значение усредненной по фолдам метрики качества как функции числа итераций градиентного бустинга -- \verb|history.get("auc-mean")[-1]|. Нас интересует последнее значение, так как в данном случае работает раняя остановка, отсекающая итерации, на которых метрика валдиационного поднабора не улучшалась.
+
+Задаем словарь базовых параметров модели
+\begin{lstlisting}[
+style = ironpython,
+numbers = none
+]
+params = {
+	"objective": "binary",
+	"metric": "auc",
+	"verbosity": -1,
+}
+\end{lstlisting}
+
+Создаем экземпляр сессии поиска гиперпараметров и запускаем процедуру
+\begin{lstlisting}[
+style = ironpython,
+numbers = none
+]
+study = optuna.create_study(
+	direction="maximize",
+	study_name="lgb_custom_tune",
+	storage="sqlite:///lgb_custom_tune.db",
+	load_if_exists=True,
+)
+obj = Objective(
+	params=params,
+	X_train=X_sub_train,
+	y_train=y_sub_train,
+)
+
+study.optimize(obj, n_trials=10_000, timeout=3600, gc_after_trial=True, show_progress_bar=True)
+"""
+Early stopping is not available in dart mode
+[I 2023-07-12 20:42:55,774] Trial 2 finished with value: 0.7915843034960872 and parameters: {'boosting_type': 'dart', 'drop_rate': 0.03858299934326663, 'feature_fraction': 0.6576417985829417, 'lambda_l1': 2.0847400336875205e-06, 'lambda_l2': 1.5601726363960928e-07, 'learning_rate': 0.053089739710954674, 'max_depth': 7, 'min_gain_to_split': 9.664951925856915, 'min_sum_hessian_in_leaf': 5.225144389090382, 'num_leaves': 28, 'skip_rate': 0.4467650076723885}. Best is trial 2 with value: 0.7915843034960872.
+Training until validation scores don't improve for 25 rounds
+Early stopping, best iteration is:
+[63]	cv_agg's auc: 0.789041 + 0.0112572
+[I 2023-07-12 20:43:00,285] Trial 3 finished with value: 0.7890412948420998 and parameters: {'boosting_type': 'gbdt', 'feature_fraction': 0.6643943025402321, 'lambda_l1': 8.951970272256474e-08, 'lambda_l2': 2.378248488247994e-06, 'learning_rate': 1.5117631876584775e-05, 'max_depth': 10, 'min_gain_to_split': 1.5035164684701863, 'min_sum_hessian_in_leaf': 7.405461764382568, 'num_leaves': 27}. Best is trial 2 with value: 0.7915843034960872.
+"""
+\end{lstlisting}
+
+Лучшие значения запусков и номер триалов можно получить так
+\begin{lstlisting}[
+style = ironpython,
+numbers = none
+]
+studyl.best_trial.values  # [0.8101344825181584]
+study.best_trial.number  # 97
+\end{lstlisting}
+
+А лучшую комбинацию гиперпараметров так
+\begin{lstlisting}[
+style = ironpython,
+numbers = none
+]
+study.best_trial.params
+"""
+{'boosting_type': 'dart',
+	'drop_rate': 2.941880473827647e-08,
+	'feature_fraction': 0.5055628152323044,
+	'lambda_l1': 7.954225765575002e-08,
+	'lambda_l2': 0.00047227364783597475,
+	'learning_rate': 0.07613335252187517,
+	'max_depth': 10,
+	'min_gain_to_split': 0.5900059747673241,
+	'min_sum_hessian_in_leaf': 5.558746874238254,
+	'num_leaves': 80,
+	'skip_rate': 6.643407036038301e-05}
+"""
+\end{lstlisting}
+
+Обучаем модель экстримального градиентного бустинга с наилучшей комбинацией гиперпараметров на всем обучающем наборе данных и забираем последнее значение метрики качества
+\begin{lstlisting}[
+style = ironpython,
+numbers = none
+]
+dtrain = lgb.Dataset(X_sub_train, y_sub_train)
+dval = lgb.Dataset(X_val, y_val)
+
+params.update(study.best_trial.params)
+
+model = lgb.train(
+	params=params,
+	train_set=dtrain,
+	valid_sets=[dtrain, dval],
+	num_boost_round=1_000,
+	# callbacks=[lgb.early_stopping(25)],
+)
+"""
+...
+[993]	training's auc: 0.873883	valid_1's auc: 0.820188
+[994]	training's auc: 0.873883	valid_1's auc: 0.820188
+[995]	training's auc: 0.873883	valid_1's auc: 0.820188
+[996]	training's auc: 0.873883	valid_1's auc: 0.820188
+[997]	training's auc: 0.873883	valid_1's auc: 0.820188
+[998]	training's auc: 0.873883	valid_1's auc: 0.820188
+[999]	training's auc: 0.873883	valid_1's auc: 0.820188
+[1000]	training's auc: 0.873883	valid_1's auc: 0.820188
+"""
+\end{lstlisting}
+
+ВАЖНО: ранняя остановка не доступна, когда используются DART-деревья.
+
+Еще раз. После такого как наилучшая комбинация гиперпараметров найдена, модель обучается на полном обучающем наборе данных \verb|(X_sub_train, y_sub_train)| с наилучшей комбинацией гиперепараметров, найденной с помощью перекрестной проверки, и оценивает метрику качества на внешнем валидационном поднаборе \verb|(X_val,)| (для того чтобы можно было корректно сравнивать разные модели, модели сравниваются именно на валидационном поднаборе) для каждой итерации градиентного бустинга. 
+
+Получить лучшие значения метрики можно следующим образом
+\begin{lstlisting}[
+style = ironpython,
+numbers = none
+]
+model.best_score
+"""
+defaultdict(collections.OrderedDict,
+	{'training': OrderedDict([('auc', 0.8738825455237967)]),
+		'valid_1': OrderedDict([('auc', 0.820187936036874)])})
+"""
+\end{lstlisting}
+
+Можно проверить результат
+\begin{lstlisting}[
+style = ironpython,
+numbers = none
+]
+roc_auc_score(y_sub_train, model.predict(X_sub_train))  # 0.8738825455237967 
+roc_auc_score(y_val, model.predict(X_val))  # 0.8201879360368739
+\end{lstlisting}
+
+
 
 \subsection{Эффективные алгоритмы оптимизации}
 
