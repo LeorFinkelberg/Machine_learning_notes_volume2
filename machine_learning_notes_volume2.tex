@@ -5689,6 +5689,43 @@ LightGBM чтобы ускорить обучение модели и снизи
 В документации LightGBM ничего нет о регуляризующем эффекте низких \verb|learning_rate|, но в документации XGBoost низкие значения темпа обучения встречаются в контексте борьбы с переобучением.
 
 
+\subsection{Перекрестная проверка с ранней остановкой}
+
+Если не задать обратный вызов ранней остановки, то LightGBM отработает все заданные итерации градиентного бустинга (\verb|num_boost_round|). Если же указать раннюю остановку, то обучение остановится на итерации, после которой метрика качества на валидационном поднаборе ухудшается (\pic{fig:lgb_early_stopping})
+\begin{lstlisting}[
+style = ironpython,
+numbers = none
+]
+import lightgbm as lgb
+
+METRIC = "auc"
+
+params = {
+    "objective": "binary",
+    "metric": METRIC,  # это имя будет использоваться в качестве ключа в результатах перекрестной проверки
+    "verbosity": -1,
+}
+
+dtrain = lgb.Dataset(X_train, y_train)
+
+history = lgb.cv(
+    params=params,
+    train_set=dtrain,
+    callbacks=[lgb.early_stopping(25)],
+    nfold=5,
+)
+
+history.get(f"{METRIC}-mean")[-1]
+\end{lstlisting}
+
+\begin{figure}[h]
+	\centering
+	\includegraphics[scale=0.85]{figures/lgb_early_stopping.png}
+	\caption{ Зависимость ROC-AUC от числа итераций граидентного бустинга }\label{fig:lgb_early_stopping}
+\end{figure}
+
+
+
 \subsection{Подбор гиперпараметров LightGBM с подрезкой <<слабых>> запусков}
 
 \begin{lstlisting}[
