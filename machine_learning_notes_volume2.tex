@@ -7881,6 +7881,25 @@ clf_zero_shot = default.LGBMClassifier(
 clf_zero_shot.fit(X_sub_train, y_sub_train)
 \end{lstlisting}
 
+Как отмечается в документации технику Zero-Shot AutoML еще можно использовать, если при обучении модели задать \verb|starting_points="data"|, \verb|max_iter=0| и \verb|time_budget=None|
+\begin{lstlisting}[
+style = ironpython,
+numbers = none
+]
+from flaml import AutoML
+automl = AutoML()
+automl_settings = {
+	"task": "classification",
+	"starting_points": "data",  # <- NB!
+	"estimator_list": ["lgbm"],
+	"time_budget": None,  # <- NB!
+	"max_iter": 0,  # <- NB!
+}
+automl.fit(X_train, y_train, **automl_settings)
+\end{lstlisting}
+
+Этот вариант с \verb|AutoML()| будет вести себя также как \verb|default.LGBMClassifier()|.
+
 При сохранении модели нужно вызвать бустер
 \begin{lstlisting}[
 style = ironpython,
