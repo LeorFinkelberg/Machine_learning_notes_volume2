@@ -7867,6 +7867,39 @@ hyperparams, estimator_name, X_transformed, y_transformed = reg.suggest_hyperpar
 print(hyperparams)
 \end{lstlisting}
 
+Пример использования
+\begin{lstlisting}[
+style = ironpython,
+numbers = none
+]
+from flaml import default
+
+clf_zero_shot = default.LGBMClassifier(
+	max_depth=10,
+)
+
+clf_zero_shot.fit(X_sub_train, y_sub_train)
+\end{lstlisting}
+
+При сохранении модели нужно вызвать бустер
+\begin{lstlisting}[
+style = ironpython,
+numbers = none
+]
+joblib.dump(clf_zero_shot.booster_, "./clf_zero_shot_lgbm.pkl")
+booster = joblib.load("./clf_zero_shot_lgbm.pkl")  # <lightgbm.basic.Booster at 0x1ba689a15e0>
+booster.predict(X_val)  # array([0.29226837, 0.00657792, 0.54021481, ..., 
+\end{lstlisting}
+
+ВАЖНО! Метод \verb|predict| бустера возвращает вероятность принадлежности экземпляра положенительному классу, а метод \verb|predict| модели\\ \verb|flaml.default.estimator.flamlize_estimator.<locals>.EstimatorClass| -- метки класса. То есть чтобы получить вероятности нужно делать так
+\begin{lstlisting}[
+style = ironpython,
+numbers = none	
+]
+clf_zero_shot.booster_.predict(X_val)  # array([0.29226837, 0.00657792, 0.54021481, ...
+clf_zero_shot.predict_proba(X_val)[:, 1]  # array([0.29226837, 0.00657792, 0.54021481, ...
+\end{lstlisting}
+
 \subsection{Мультицель в задаче регрессии}
 
 \begin{lstlisting}[
